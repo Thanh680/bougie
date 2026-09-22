@@ -1,0 +1,22 @@
+{
+  "nom": "Arene vide",
+  "version": 1,
+  "forme": "cercle",
+  "rayon": 45,
+  "hauteurSol": 0,
+  "gradient": {
+    "rayonCentre": 12,
+    "rayonPeripherie": 34
+  },
+  "apparitions": [
+    { "x": 38.0, "z": 0.0 },
+    { "x": 26.87, "z": 26.87 },
+    { "x": 0.0, "z": 38.0 },
+    { "x": -26.87, "z": 26.87 },
+    { "x": -38.0, "z": 0.0 },
+    { "x": -26.87, "z": -26.87 },
+    { "x": 0.0, "z": -38.0 },
+    { "x": 26.87, "z": -26.87 }
+  ],
+  "obstacles": []
+}

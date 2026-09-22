@@ -1,0 +1,514 @@
+:root {
+  --or: #ffc84a;
+  --orange: #ff7a1f;
+  --magenta: #ff44bf;
+  --rouge: #ff4d4d;
+  --vert: #4ade80;
+  --bleu: #5aa9ff;
+  --fond: #0d0f14;
+  --texte: #e8ecf4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--fond);
+  color: var(--texte);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#app {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  outline: none;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* --- Vignette de degats --------------------------------------------------- */
+.vignette {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, transparent 42%, rgba(200, 20, 20, 0.75) 100%);
+  transition: opacity 60ms linear;
+}
+
+/* --- Reticule ------------------------------------------------------------- */
+.reticule {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 120px;
+  display: grid;
+  justify-items: center;
+}
+
+.reticule .croix {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.7);
+}
+
+.reticule .marqueur {
+  position: absolute;
+  top: -9px;
+  width: 22px;
+  height: 22px;
+  opacity: 0;
+  background:
+    linear-gradient(45deg, transparent 44%, #fff 44%, #fff 56%, transparent 56%),
+    linear-gradient(-45deg, transparent 44%, #fff 44%, #fff 56%, transparent 56%);
+}
+
+.reticule .marqueur.crit {
+  background:
+    linear-gradient(45deg, transparent 42%, var(--or) 42%, var(--or) 58%, transparent 58%),
+    linear-gradient(-45deg, transparent 42%, var(--or) 42%, var(--or) 58%, transparent 58%);
+  transform: scale(1.35);
+}
+
+/* Jauge de charge de l'arme : le retour qui enseigne le rythme de clic. */
+.jauge-charge {
+  margin-top: 16px;
+  width: 92px;
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+
+.jauge-charge i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #cfd6e4;
+  transition: width 40ms linear;
+}
+
+.jauge-charge i.pleine {
+  background: var(--or);
+  box-shadow: 0 0 8px var(--or);
+}
+
+/* Compteur de vitesse, sous le réticule comme dans les jeux de déplacement.
+   Passe en ambre dès qu'on dépasse la vitesse de course : c'est le seul cas
+   qui mérite un coup d'œil. */
+.vitesse {
+  margin-top: 7px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(232, 236, 244, 0.55);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+}
+
+.vitesse b {
+  font-weight: 600;
+  color: rgba(232, 236, 244, 0.9);
+}
+
+.vitesse b.anormale,
+.vitesse span.anormale {
+  color: var(--or);
+}
+
+.vitesse span {
+  margin-left: 8px;
+  opacity: 0.85;
+}
+
+.arme-lourd {
+  margin-top: 8px;
+  text-align: center;
+  white-space: nowrap;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: var(--or);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+  animation: pulsation 0.4s ease-in-out infinite alternate;
+}
+
+.arme-lourd[hidden] {
+  display: none;
+}
+
+/* Étourdissement : on affiche toujours comment en sortir et dans combien de
+   temps. Un blocage de contrôle qu'on subit sans information est insupportable. */
+.etourdi {
+  margin-top: 10px;
+  text-align: center;
+  white-space: nowrap;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+}
+
+.etourdi[hidden] {
+  display: none;
+}
+
+.etourdi b {
+  display: block;
+  font-size: 15px;
+  letter-spacing: 0.22em;
+  color: var(--or);
+  animation: pulsation 0.45s ease-in-out infinite alternate;
+}
+
+.etourdi span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.etourdi span.pret {
+  opacity: 1;
+  color: var(--bleu);
+}
+
+@keyframes pulsation {
+  to {
+    opacity: 0.45;
+  }
+}
+
+/* --- Coins ---------------------------------------------------------------- */
+.coin {
+  position: absolute;
+  padding: 18px 22px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.bas-gauche {
+  left: 0;
+  bottom: 0;
+  width: 320px;
+}
+
+.haut-droite {
+  right: 0;
+  top: 0;
+  text-align: right;
+  font-size: 13px;
+}
+
+.discret {
+  opacity: 0.45;
+}
+
+.serie-bloc {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  column-gap: 8px;
+  margin-bottom: 10px;
+}
+
+.serie-valeur {
+  font-size: 42px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.serie-label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+
+.palier {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+
+.palier.rang-1 {
+  color: var(--or);
+  opacity: 1;
+}
+.palier.rang-2 {
+  color: var(--orange);
+  opacity: 1;
+}
+.palier.rang-3 {
+  color: var(--magenta);
+  opacity: 1;
+  font-weight: 700;
+}
+
+.barre {
+  position: relative;
+  height: 16px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+  margin-bottom: 5px;
+}
+
+.barre i {
+  display: block;
+  height: 100%;
+  transition: width 90ms linear;
+}
+
+.barre.pv i {
+  background: linear-gradient(90deg, #d13b3b, #ff6b5a);
+}
+
+.barre.pv span {
+  position: absolute;
+  inset: 0;
+  text-align: center;
+  font-size: 11px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.barre.xp {
+  height: 6px;
+}
+
+.barre.xp i {
+  background: var(--bleu);
+}
+
+.ligne-infos {
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.ligne-infos .sep {
+  opacity: 0.3;
+  margin: 0 6px;
+}
+
+.ligne-infos .esquive {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.jauge-esquive {
+  position: relative;
+  display: inline-block;
+  width: 56px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+/* Le trait du milieu : une esquive coûte exactement la moitié de la jauge, donc
+   on lit d'un coup d'œil s'il en reste une ou deux. */
+.jauge-esquive::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.jauge-esquive i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: #8d96ab;
+  transition: width 60ms linear;
+}
+
+.jauge-esquive i.pleine {
+  background: var(--bleu);
+  box-shadow: 0 0 6px var(--bleu);
+}
+
+/* --- Kill feed ------------------------------------------------------------ */
+.feed {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  font-size: 13px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+.feed div {
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: 3px;
+  padding: 3px 10px;
+  animation: entree 160ms ease-out;
+}
+
+.feed .moi {
+  color: var(--vert);
+}
+.feed .contre-moi {
+  color: var(--rouge);
+}
+.feed .palier {
+  color: var(--orange);
+}
+.feed .palier-moi {
+  color: var(--magenta);
+  font-weight: 700;
+}
+.feed .niveau {
+  color: var(--bleu);
+}
+
+@keyframes entree {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+/* --- Plaques au-dessus des tetes ------------------------------------------ */
+.plaques {
+  position: absolute;
+  inset: 0;
+}
+
+.plaque {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 110px;
+  text-align: center;
+  font-size: 11px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+}
+
+.plaque .nom {
+  display: block;
+  margin-bottom: 3px;
+  white-space: nowrap;
+}
+
+.plaque .nom.rang-1 {
+  color: var(--or);
+}
+.plaque .nom.rang-2 {
+  color: var(--orange);
+}
+.plaque .nom.rang-3 {
+  color: var(--magenta);
+  font-weight: 700;
+}
+
+.plaque .pvb {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.8);
+  overflow: hidden;
+}
+
+.plaque .pvb i {
+  display: block;
+  height: 100%;
+  background: #ff6b5a;
+  transition: width 90ms linear;
+}
+
+/* --- Ecran de mort -------------------------------------------------------- */
+.mort {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  background: rgba(10, 0, 0, 0.55);
+  text-align: center;
+}
+
+.mort[hidden] {
+  display: none;
+}
+
+.mort h1 {
+  margin: 0;
+  font-size: 58px;
+  letter-spacing: 0.16em;
+  color: var(--rouge);
+}
+
+.mort p {
+  margin: 0;
+  opacity: 0.7;
+}
+
+.mort span {
+  margin-top: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+/* --- Ecran de pause ------------------------------------------------------- */
+.pause {
+  position: absolute;
+  inset: 0;
+  display: none;
+  place-content: center;
+  justify-items: center;
+  background: rgba(8, 10, 14, 0.78);
+  pointer-events: none;
+  text-align: center;
+}
+
+.pause.visible {
+  display: grid;
+}
+
+.pause h1 {
+  margin: 0 0 18px;
+  font-size: 34px;
+  letter-spacing: 0.06em;
+}
+
+.pause ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  opacity: 0.75;
+  font-size: 14px;
+}
+
+.pause b {
+  color: var(--or);
+  font-weight: 600;
+}

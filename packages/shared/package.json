@@ -1,0 +1,15 @@
+{
+  "name": "@bougie/shared",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Simulation autoritaire partagee client/serveur. Aucune dependance moteur.",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}
