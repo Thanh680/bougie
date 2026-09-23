@@ -27,8 +27,9 @@ export class Entrees {
   verrouille = false
 
   private attaqueEnAttente = false
-  private rueeEnAttente = false
+  private specialeEnAttente = false
   private boutonEnfonce = false
+  private boutonDroitEnfonce = false
   /** Fronts montants clavier en attente (repetitions du clavier filtrees). */
   private fronts: number[] = []
   /** Fronts hors deplacement, transmis au jeu (touches de debug). */
@@ -57,12 +58,14 @@ export class Entrees {
         this.attaqueEnAttente = true
         this.boutonEnfonce = true
       } else if (e.button === pc.MOUSEBUTTON_RIGHT) {
-        this.rueeEnAttente = true
+        this.specialeEnAttente = true
+        this.boutonDroitEnfonce = true
       }
     })
 
     app.mouse?.on(pc.EVENT_MOUSEUP, (e: pc.MouseEvent) => {
       if (e.button === pc.MOUSEBUTTON_LEFT) this.boutonEnfonce = false
+      else if (e.button === pc.MOUSEBUTTON_RIGHT) this.boutonDroitEnfonce = false
     })
 
     app.mouse?.on(pc.EVENT_MOUSEMOVE, (e: pc.MouseEvent) => {
@@ -86,7 +89,10 @@ export class Entrees {
 
     document.addEventListener('pointerlockchange', () => {
       this.verrouille = pc.Mouse.isPointerLocked()
-      if (!this.verrouille) this.boutonEnfonce = false
+      if (!this.verrouille) {
+        this.boutonEnfonce = false
+        this.boutonDroitEnfonce = false
+      }
     })
   }
 
@@ -151,16 +157,22 @@ export class Entrees {
     return this.verrouille && this.boutonEnfonce
   }
 
-  veutRuer(): boolean {
+  /** Front montant du clic droit : l'action speciale de l'arme. */
+  veutSpeciale(): boolean {
     if (!this.verrouille) {
-      this.rueeEnAttente = false
+      this.specialeEnAttente = false
       return false
     }
-    if (this.rueeEnAttente) {
-      this.rueeEnAttente = false
+    if (this.specialeEnAttente) {
+      this.specialeEnAttente = false
       return true
     }
     return false
+  }
+
+  /** Etat continu du clic droit : maintenu, le tourbillon enchaine ses tours. */
+  get specialeMaintenue(): boolean {
+    return this.verrouille && this.boutonDroitEnfonce
   }
 
   /** Consomme les fronts clavier hors deplacement (touches de debug). */

@@ -80,15 +80,16 @@ body {
     linear-gradient(-45deg, transparent 44%, #fff 44%, #fff 56%, transparent 56%);
 }
 
-.reticule .marqueur.crit {
+.reticule .marqueur.fort {
   background:
     linear-gradient(45deg, transparent 42%, var(--or) 42%, var(--or) 58%, transparent 58%),
     linear-gradient(-45deg, transparent 42%, var(--or) 42%, var(--or) 58%, transparent 58%);
   transform: scale(1.35);
 }
 
-/* Jauge de charge de l'arme : le retour qui enseigne le rythme de clic. */
-.jauge-charge {
+/* Jauge du coup en cours : se remplit pendant l'animation, dorée quand on peut
+   refrapper. C'est le retour qui enseigne le rythme de clic. */
+.jauge-coup {
   margin-top: 16px;
   width: 92px;
   height: 5px;
@@ -98,7 +99,7 @@ body {
   overflow: hidden;
 }
 
-.jauge-charge i {
+.jauge-coup i {
   display: block;
   height: 100%;
   width: 0;
@@ -106,7 +107,7 @@ body {
   transition: width 40ms linear;
 }
 
-.jauge-charge i.pleine {
+.jauge-coup i.pleine {
   background: var(--or);
   box-shadow: 0 0 8px var(--or);
 }

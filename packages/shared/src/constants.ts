@@ -62,43 +62,38 @@ export const COUT_ESQUIVE = 0.5
 export const REGEN_ESQUIVE = 0.36
 
 // --- Combat (§3 P1 tranche : coups simples facon Minecraft, pas de garde) ----
-/** Le coup est instantane au clic : aucune fenetre de telegraphe a lire.
- *  C'est ce qui rend le systeme insensible au ping (le point qui tuait le RPS). */
-/** Assez long pour que la taille se lise : 0.3 s, dont un tiers de frappe. */
-export const DUREE_SWING = 0.3
+// La duree d'un coup normal depend de l'arme : ARMES[].dureeSwing (combat.ts).
 
 /**
  * Delai entre la decision d'attaquer et le moment ou le coup touche.
  *
- * AUCUNE attaque n'est instantanee. Ce delai laisse l'animation partir avant
+ * AUCUNE attaque n'est instantanee. Ce delai laisse l'animation s'armer avant
  * que les degats tombent, et surtout il rend l'attaque INTERRUPTIBLE : encaisser
  * un coup pendant cette fenetre annule la sienne (voir §S4 League).
  * C'est pour ca qu'un coup normal n'a pas besoin de recul — l'annulation fait
  * le travail que ferait un rebond, sans deplacer personne.
  *
+ * Comme dans un jeu de combat facon Street Fighter, le coup fort part bien plus
+ * tard que le coup moyen : un coup normal lance pendant l'armement d'un coup
+ * lourd arrive avant lui, et l'annule.
+ *
  * Le pari de §3 tient toujours : ce n'est pas une fenetre de LECTURE. Personne
- * n'a a lire l'animation adverse pour choisir une reponse en 120 ms. C'est
- * l'attaquant qui s'expose, et l'annulation est un effet, pas une decision.
+ * n'a a lire l'animation adverse pour choisir une reponse. C'est l'attaquant
+ * qui s'expose, et l'annulation est un effet, pas une decision.
  */
-export const WINDUP_NORMAL = 0.12
-export const WINDUP_LOURD = 0.25
-/**
- * Aucune nouvelle attaque tant que le swing precedent n'est pas termine.
- * C'est volontairement la MEME valeur que DUREE_SWING : un swing visible vaut
- * toujours un coup reel, et un coup reel produit toujours un swing entier.
- * Sans ca on pouvait relancer l'animation toutes les 0.1 s et le combat
- * devenait illisible — ce que §5 interdit explicitement.
- * La vraie sanction du clic rapide reste la courbe de charge, pas ce verrou.
- */
-export const INTERVALLE_MIN_COUP = DUREE_SWING
-/** Degats a charge nulle, en fraction des degats de l'arme (Minecraft : 0.2). */
-export const CHARGE_MIN = 0.2
+export const WINDUP_NORMAL = 0.2
+/** A compter de la reconnaissance du maintien : 0.63 s apres l'appui. */
+export const WINDUP_LOURD = 0.45
+// Aucune nouvelle attaque tant que l'animation de la precedente n'est pas
+// terminee (`finSwing`) : un swing visible vaut toujours un coup reel, et un
+// coup reel produit toujours un swing entier. Sans ca on pouvait relancer
+// l'animation toutes les 0.1 s et le combat devenait illisible — ce que §5
+// interdit. La jauge sous le reticule montre exactement ce verrou. Plus de
+// courbe de degats facon Minecraft : on ne peut plus frapper avant que la
+// jauge soit pleine, chaque coup porte donc ses degats pleins.
+
 /** Invulnerabilite apres un coup recu. Sans elle, deux attaquants tuent en 1 s. */
 export const INVULN_APRES_COUP = 0.4
-/** Coup critique : frappe en retombant, charge pleine. Le skill-check du systeme. */
-export const MULT_CRITIQUE = 1.5
-export const CRIT_VITESSE_CHUTE = -0.2
-export const CRIT_CHARGE_MIN = 0.9
 
 // Pas de recul a l'impact — retire volontairement. Encaisser ne deplace plus
 // personne : la lecture du coup passe par le flash et l'ecrasement, pas par un
@@ -110,10 +105,9 @@ export const CRIT_CHARGE_MIN = 0.9
  * coute aussi de la vitesse. C'est ce qui donne au corps a corps une inertie
  * sans jamais ajouter de resistance aux degats.
  * L'esquive annule le ralentissement — c'est sa deuxieme fonction, apres la portee.
+ * L'attaquant est ralenti exactement le temps de son swing, coup lourd compris.
  */
 export const MULT_RALENTI = 0.45
-/** L'attaquant est ralenti exactement le temps de son swing. */
-export const DUREE_RALENTI_ATTAQUANT = DUREE_SWING
 export const DUREE_RALENTI_TOUCHE = 0.35
 
 // --- Attaque sautee a l'epee (plongeon) -------------------------------------
@@ -152,24 +146,78 @@ export const STUN_DELAI_AVANT_ESQUIVE = 0.3
  * Relache avant ce delai, c'est un coup normal. Toujours enfonce a ce delai,
  * c'est un coup lourd — il n'y a pas de barre a remplir, le maintien suffit.
  * C'est ce qui evite qu'un coup normal precede systematiquement un coup lourd.
+ * Un maintien ne donne qu'UN coup lourd : pour en relancer un, il faut relacher.
  */
 export const SEUIL_CLIC_MAINTIEN = 0.18
 export const LOURD_DEGATS = 30
-export const LOURD_PORTEE = 3.4
+// La portee du coup lourd depend de l'arme : ARMES[].porteeLourd (combat.ts).
 export const LOURD_DEMI_ANGLE = (60 * Math.PI) / 180
-/** Poussee purement horizontale : on repousse, on ne fait pas rebondir.
- *  ~2 m parcourus avant que la friction ait tout mange. */
-export const LOURD_POUSSEE = 14
-export const LOURD_STUN = 0.35
-export const LOURD_SWING = 0.4
-export const LOURD_RECUPERATION = 0.3
-// Pas de recharge : c'est l'immobilite pendant la charge qui fait office de cout.
+/**
+ * Projection : la cible decolle et part loin en arriere. En l'air la friction
+ * ne mange presque rien, donc c'est le temps de vol qui fait la distance, pas
+ * la vitesse horizontale.
+ */
+export const LOURD_POUSSEE = 8
+/** Vitesse verticale donnee a la cible : apex 1.2 m, 0.69 s en l'air. */
+export const LOURD_ELAN = 7
+/**
+ * Une cible projetee reste etourdie pendant tout son vol, plus ce court temps
+ * au sol. Le controle aerien est total : rendu en plein vol, il laisserait la
+ * cible annuler sa propre projection en 0.1 s. La sortie par esquive reste
+ * possible (STUN_DELAI_AVANT_ESQUIVE).
+ */
+export const STUN_APRES_ATTERRISSAGE = 0.1
+/** Projection legere : dernier coup de l'enchainement et dernier tour du
+ *  tourbillon. A peine decollee, ~2.5 m en arriere. */
+export const LEGERE_POUSSEE = 6
+export const LEGERE_ELAN = 3.5
+/**
+ * Duree totale de l'animation : armement et frappe (WINDUP_LOURD), puis retour.
+ * On garde le controle pendant tout ce temps, ralenti, et on peut sauter. Pas
+ * de recharge : ce qui limite le coup lourd, c'est son long armement annulable
+ * et le fait de ne rien pouvoir lancer d'autre avant la fin — ni coup, ni ruee,
+ * ni esquive (elle laverait le ralentissement).
+ */
+export const LOURD_SWING = 1
+
+// --- Longue hache : enchainement (clic gauche) ------------------------------
+/**
+ * Facon Counter Sword de S4 League : un clic pendant un coup enchaine le
+ * suivant des qu'il se termine, jusqu'a trois coups differents ; le troisieme
+ * projette un peu. Les degats de chaque coup sont dans ARMES.hache.degats.
+ * Un clic qui arrive juste apres la fin du coup enchaine encore, dans cette
+ * fenetre ; au-dela, on repart du premier.
+ */
+export const COMBO_FENETRE = 0.25
+
+// --- Longue hache : tourbillon (clic droit) ---------------------------------
+// Facon tourbillon de la batte de S4 League : un tour a 360 deg par clic, ou
+// plusieurs tant qu'on maintient, jamais plus de TOUR_MAX d'affilee. Le
+// dernier repousse un peu. On tourne ralenti comme pour toute attaque, et sans
+// esquive : sinon le tourbillon devient une sortie d'encerclement, et il
+// protege le porteur d'aura (§9).
+
+/** Plus long que INVULN_APRES_COUP : chaque tour peut toucher la meme cible. */
+export const TOUR_DUREE = 0.45
+/** Au milieu du tour. Annulable avant, comme tout coup. */
+export const TOUR_IMPACT = 0.2
+export const TOUR_RAYON = 3.2
+export const TOUR_DEGATS = 12
+export const TOUR_MAX = 3
+/** Retour en garde apres le dernier tour : aucun coup avant la fin. */
+export const TOUR_RECUPERATION = 0.35
 
 // --- Ruee (clic droit) ------------------------------------------------------
 /**
  * Une charge en ligne droite, direction figee au depart. C'est un outil
  * d'engagement, pas de fuite : elle ne se pilote pas, et s'en servir pour
  * s'echapper oblige a tourner le dos.
+ *
+ * Elle se conclut TOUJOURS par un coup lourd, qu'elle ait touche ou non, et
+ * celui-la interdit de sauter. Pas de recharge : c'est ce coup lourd — une
+ * seconde ralenti, sans ruee ni saut — qui l'empeche de devenir le moyen de
+ * deplacement le plus rapide du jeu. 7 m en 0.39 s font 18 m/s, mais la
+ * moyenne sur un cycle retombe sous la course.
  */
 export const RUEE_VITESSE = 18
 export const RUEE_DISTANCE = 7
@@ -177,21 +225,12 @@ export const RUEE_DEGATS = 12
 export const RUEE_STUN = 0.35
 export const RUEE_RAYON_IMPACT = 1.35
 /**
- * Pas de recharge non plus, mais une recuperation quand la ruee ne touche rien.
- *
- * Elle n'est pas decorative : 7 m en 0.39 s font 18 m/s de moyenne, donc sans
- * elle la ruee serait le moyen de deplacement le plus rapide du jeu et
- * demolirait la regle « une seule vitesse pour tout le monde ».
- * A 0.55 s, la moyenne retombe a 7 / 0.94 = 7.4 m/s, sous les 7.7 m/s reels
- * d'une course lancee. Ruer pour avancer devient une perte de temps.
- */
-export const RUEE_RECUPERATION = 0.55
-/**
  * Invulnerabilite reduite apres l'impact de ruee.
  *
- * L'invulnerabilite normale de 0.4 s bloquerait le coup lourd que la ruee
- * enchaine (il arrive a WINDUP_LOURD). La ruee et son coup lourd sont un seul
- * geste, pas deux attaques successives : on raccourcit donc la fenetre.
+ * Elle existait pour que l'invulnerabilite normale (0.4 s) ne bloque pas le
+ * coup lourd enchaine. Depuis que WINDUP_LOURD la depasse, le combo n'en a plus
+ * besoin ; il lui reste un effet : les autres peuvent frapper la cible ruee
+ * plus tot. Redevient indispensable si WINDUP_LOURD repasse sous 0.4 s.
  */
 export const RUEE_INVULN = 0.15
 

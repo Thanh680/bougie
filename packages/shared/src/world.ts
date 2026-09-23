@@ -1,31 +1,26 @@
 import type { Carte } from './carte'
-import { ARMES, cibleDevant, chargeDe, degatsAvecCharge } from './combat'
+import { ARMES, cibleDevant, ciblesAutour } from './combat'
 import {
   ACCEL_AIR,
   ACCEL_SOL,
+  COMBO_FENETRE,
   COUT_ESQUIVE,
-  CRIT_CHARGE_MIN,
-  CRIT_VITESSE_CHUTE,
   DELAI_REAPPARITION,
   DUREE_ESQUIVE,
-  DUREE_RALENTI_ATTAQUANT,
   DUREE_RALENTI_TOUCHE,
-  DUREE_SWING,
   FRICTION_AIR,
   FRICTION_SOL,
   GRAVITE,
-  INTERVALLE_MIN_COUP,
   INVULN_APRES_COUP,
+  LEGERE_ELAN,
+  LEGERE_POUSSEE,
   LOURD_DEGATS,
   LOURD_DEMI_ANGLE,
-  LOURD_PORTEE,
+  LOURD_ELAN,
   LOURD_POUSSEE,
-  LOURD_RECUPERATION,
-  LOURD_STUN,
   LOURD_SWING,
   MANNEQUIN_PV,
   MAX_TICKS_PAR_FRAME,
-  MULT_CRITIQUE,
   MULT_RALENTI,
   NIVEAU_MAX,
   PLONGEON_DEGATS,
@@ -44,12 +39,18 @@ import {
   RUEE_DISTANCE,
   RUEE_INVULN,
   RUEE_RAYON_IMPACT,
-  RUEE_RECUPERATION,
   RUEE_STUN,
   RUEE_VITESSE,
   SEUIL_CLIC_MAINTIEN,
+  STUN_APRES_ATTERRISSAGE,
   STUN_DELAI_AVANT_ESQUIVE,
   TICK_DT,
+  TOUR_DEGATS,
+  TOUR_DUREE,
+  TOUR_IMPACT,
+  TOUR_MAX,
+  TOUR_RAYON,
+  TOUR_RECUPERATION,
   VITESSE_COURSE,
   VITESSE_ESQUIVE,
   VITESSE_SAUT,
@@ -125,11 +126,18 @@ export class World {
       finSuspension: -99,
       dernierPlongeonA: -99,
       finRecuperation: -99,
+      sautInterditJusqua: -99,
       maintienDepuis: -99,
       lourdPendantCeMaintien: false,
       dernierLourdA: -99,
       attaqueEnCours: 'aucun',
       attaqueImpactA: -99,
+      attaqueAnnuleeA: -99,
+      comboEtape: -1,
+      coupEnAttente: false,
+      tourbillon: 0,
+      tourDemande: false,
+      dernierTourA: -99,
       ruee: 'aucun',
       rueeOrigine: v3(),
       rueeDirection: v3(0, 0, -1),
@@ -147,7 +155,6 @@ export class World {
       arme: 'poings',
       dernierCoupA: -99,
       finSwing: -99,
-      chargeDernierCoup: 0,
       invulnJusqua: this.temps + PROTECTION_APPARITION,
       dernierDegatSubiA: -99,
       tempsReapparition: 0,
@@ -202,24 +209,22 @@ export class World {
       if (!e.vivant) continue
       const libre = this.temps >= e.stunJusqua
 
-      if (e.entree.ruee) {
-        e.entree.ruee = false
-        if (libre) this.tenterRuee(e)
+      if (e.entree.speciale) {
+        e.entree.speciale = false
+        if (libre) this.tenterSpeciale(e)
       }
 
       // Clic ou maintien ? On ne decide rien a l'appui : c'est la duree du
       // maintien qui tranche, donc un coup lourd n'est jamais precede d'un
-      // coup normal.
+      // coup normal. Un maintien ne donne qu'un coup lourd : pour en relancer
+      // un, il faut relacher.
       if (e.entree.attaqueMaintenue) {
         if (e.maintienDepuis < 0) {
           e.maintienDepuis = this.temps
           e.lourdPendantCeMaintien = false
         }
         const pret = e.attaqueEnCours === 'aucun' && this.temps >= e.finRecuperation
-        if (pret && this.temps - e.maintienDepuis >= SEUIL_CLIC_MAINTIEN) {
-          // Rearme pour le suivant : maintenir enchaine les coups lourds.
-          e.maintienDepuis = this.temps
-          e.lourdPendantCeMaintien = true
+        if (pret && !e.lourdPendantCeMaintien && this.temps - e.maintienDepuis >= SEUIL_CLIC_MAINTIEN) {
           this.lancerAttaque(e, 'lourd')
         }
       } else {
@@ -229,8 +234,17 @@ export class World {
           this.temps - e.maintienDepuis < SEUIL_CLIC_MAINTIEN
         e.maintienDepuis = -99
         e.lourdPendantCeMaintien = false
-        if (clicBref) this.lancerAttaque(e, 'normal')
+        // Pendant un coup de l'enchainement, le clic est garde pour le suivant.
+        if (clicBref && !this.lancerAttaque(e, 'normal') && this.peutEnchainer(e)) e.coupEnAttente = true
       }
+
+      // Le coup demande pendant le precedent part des que celui-ci se termine.
+      if (e.coupEnAttente && this.temps >= e.finSwing) {
+        e.coupEnAttente = false
+        this.lancerAttaque(e, 'normal')
+      }
+
+      if (e.tourbillon > 0 && this.temps >= e.dernierTourA + TOUR_DUREE) this.finirTour(e)
 
       // Resolution d'une attaque lancee : c'est ici que les degats tombent,
       // un cran apres l'entree. Si on a ete touche entre-temps, elle a ete
@@ -239,6 +253,7 @@ export class World {
         const type = e.attaqueEnCours
         e.attaqueEnCours = 'aucun'
         if (type === 'lourd') this.resoudreLourd(e)
+        else if (type === 'tour') this.resoudreTour(e)
         else this.resoudreNormal(e)
       }
     }
@@ -260,13 +275,17 @@ export class World {
     // L'esquive est traitee en premier : c'est elle qui peut annuler
     // l'etourdissement et le ralentissement de ce tick.
     if (entree.esquive !== 0) {
-      this.tenterEsquive(e, entree.esquive)
+      // Pendant son propre coup lourd ou son tourbillon, l'esquive est
+      // interdite : elle laverait le ralentissement, qui fait partie de leur
+      // cout. Espace + un cote y devient donc un saut — sinon on ne peut pas
+      // sauter en strafant.
+      if (this.esquiveInterdite(e)) entree.saut = true
+      else this.tenterEsquive(e, entree.esquive)
       entree.esquive = 0
     }
 
-    // Etourdi, en recuperation, ou en train de charger : plus aucun controle.
-    // L'immobilite pendant la charge n'est pas un effet de style, c'est le
-    // seul cout du coup lourd depuis qu'il n'a plus de recharge.
+    // Etourdi ou en recuperation de plongeon : plus aucun controle. Le coup
+    // lourd, lui, laisse bouger et sauter — ralenti.
     const bloque = this.temps < e.stunJusqua || this.temps < e.finRecuperation
     const f = avant(e.yaw)
     const d = droite(e.yaw)
@@ -348,7 +367,14 @@ export class World {
 
     if (entree.saut) {
       entree.saut = false
-      if (!bloque && e.auSol && e.plongeon === 'aucun' && e.ruee === 'aucun' && this.temps >= e.finEsquive) {
+      if (
+        !bloque &&
+        e.auSol &&
+        e.plongeon === 'aucun' &&
+        e.ruee === 'aucun' &&
+        this.temps >= e.finEsquive &&
+        this.temps >= e.sautInterditJusqua
+      ) {
         e.vel.y = VITESSE_SAUT
         e.auSol = false
       }
@@ -401,14 +427,27 @@ export class World {
     // L'esquive lave tout : c'est la reponse a l'engagement, pas seulement a la portee.
     e.ralentiJusqua = -99
     e.stunJusqua = -99
+    // Y compris une projection : sans ca, le plafond de vitesse resterait leve
+    // et l'esquive aerienne deviendrait un vol plane de dix metres.
+    e.finPoussee = -99
 
     this.evenements.push({ type: 'esquive', entite: e.id, direction: signe })
+  }
+
+  /** Clic droit : l'action speciale de l'arme. Aux poings, rien. */
+  private tenterSpeciale(e: Entite): void {
+    const speciale = ARMES[e.arme].speciale
+    if (speciale === 'ruee') this.tenterRuee(e)
+    else if (speciale === 'tourbillon') this.demanderTour(e)
   }
 
   // --- Ruee -----------------------------------------------------------------
 
   private tenterRuee(e: Entite): void {
     if (this.temps < e.finRecuperation) return
+    // Pas pendant un coup lourd : la ruee annulerait celui qu'elle vient
+    // d'enchainer, et ruee sur ruee on filerait a 18 m/s.
+    if (this.enCoupLourd(e)) return
     if (e.ruee !== 'aucun' || e.plongeon !== 'aucun') return
     if (this.temps < e.finEsquive) return
     if (!e.auSol) return
@@ -449,24 +488,21 @@ export class World {
     e.vel.z = 0
 
     if (cible && this.temps >= cible.invulnJusqua) {
-      this.infligerDegats(cible, e, RUEE_DEGATS, false, 1)
+      this.infligerDegats(cible, e, RUEE_DEGATS)
       if (cible.vivant) {
         cible.stunJusqua = this.temps + RUEE_STUN
         cible.stunDepuis = this.temps
-        // Fenetre raccourcie : la ruee et le coup lourd qu'elle enchaine sont
-        // un seul geste, l'invulnerabilite normale bloquerait le second.
         cible.invulnJusqua = this.temps + RUEE_INVULN
       }
-      // Le coup lourd part immediatement. C'est LUI qui immobilise l'attaquant,
-      // pas un temps mort ajoute a la fin du dash.
-      e.finRecuperation = -99
-      e.dernierCoupA = -99
-      this.lancerAttaque(e, 'lourd')
-    } else {
-      // Ruee dans le vide : la recuperation est ce qui empeche d'en faire un
-      // moyen de deplacement plus rapide que la course.
-      e.finRecuperation = this.temps + RUEE_RECUPERATION
     }
+
+    // Le coup lourd part toujours, cible touchee ou non, meme si un coup normal
+    // etait encore en cours. C'est lui qui empeche de ruer pour se deplacer
+    // plus vite qu'en courant : une seconde ralenti, sans ruee, et pour
+    // celui-la seulement, sans saut.
+    e.finSwing = -99
+    this.lancerAttaque(e, 'lourd')
+    e.sautInterditJusqua = e.finSwing
 
     this.evenements.push({
       type: 'ruee_impact',
@@ -476,34 +512,83 @@ export class World {
     })
   }
 
+  // --- Tourbillon ------------------------------------------------------------
+
+  /**
+   * Un clic = un tour. Pendant un tour, le clic demande le suivant ; sinon il
+   * lance le tourbillon, si aucun autre coup ne le bloque.
+   */
+  private demanderTour(e: Entite): void {
+    if (e.tourbillon > 0) {
+      if (e.tourbillon < TOUR_MAX) e.tourDemande = true
+      return
+    }
+    this.lancerAttaque(e, 'tour')
+  }
+
+  /** Fin d'un tour : le suivant part s'il a ete demande ou si le clic droit est maintenu. */
+  private finirTour(e: Entite): void {
+    const suite =
+      e.tourbillon < TOUR_MAX &&
+      (e.tourDemande || e.entree.specialeMaintenue) &&
+      ARMES[e.arme].speciale === 'tourbillon' &&
+      this.temps >= e.stunJusqua
+    if (suite) {
+      this.demarrerAttaque(e, 'tour')
+    } else {
+      e.tourbillon = 0
+      e.tourDemande = false
+    }
+  }
+
+  /** Un tour frappe tout ce qui l'entoure, une fois chacun. Le dernier repousse un peu. */
+  private resoudreTour(e: Entite): void {
+    const dernier = e.tourbillon === TOUR_MAX
+    for (const c of ciblesAutour(e, this.temps, this.entites.values(), TOUR_RAYON)) {
+      this.infligerDegats(c, e, TOUR_DEGATS)
+      if (dernier && c.vivant) this.projeter(c, e, LEGERE_POUSSEE, LEGERE_ELAN)
+    }
+  }
+
   // --- Coup lourd -----------------------------------------------------------
 
   private resoudreLourd(e: Entite): void {
-    const cible = cibleDevant(e, this.temps, this.entites.values(), LOURD_PORTEE, LOURD_DEMI_ANGLE)
+    const portee = ARMES[e.arme].porteeLourd
+    const cible = cibleDevant(e, this.temps, this.entites.values(), portee, LOURD_DEMI_ANGLE)
     if (cible) {
-      this.infligerDegats(cible, e, LOURD_DEGATS, false, 1)
-      if (cible.vivant) {
-        // Poussee strictement horizontale : on repousse, on ne fait pas rebondir.
-        let dx = cible.pos.x - e.pos.x
-        let dz = cible.pos.z - e.pos.z
-        const len = Math.hypot(dx, dz)
-        if (len < 1e-4) {
-          const f = avant(e.yaw)
-          dx = f.x
-          dz = f.z
-        } else {
-          dx /= len
-          dz /= len
-        }
-        cible.vel.x += dx * LOURD_POUSSEE
-        cible.vel.z += dz * LOURD_POUSSEE
-        cible.finPoussee = this.temps + 0.3
-        cible.stunJusqua = this.temps + LOURD_STUN
-        cible.stunDepuis = this.temps
-      }
+      this.infligerDegats(cible, e, LOURD_DEGATS)
+      if (cible.vivant) this.projeter(cible, e, LOURD_POUSSEE, LOURD_ELAN)
     }
 
     this.evenements.push({ type: 'coup_lourd', attaquant: e.id, cible: cible?.id ?? null })
+  }
+
+  /**
+   * La cible decolle et part en arriere, dans l'axe de `source`. Elle reste
+   * etourdie pendant tout son vol, plus un court temps au sol.
+   */
+  private projeter(cible: Entite, source: Entite, poussee: number, elan: number): void {
+    let dx = cible.pos.x - source.pos.x
+    let dz = cible.pos.z - source.pos.z
+    const len = Math.hypot(dx, dz)
+    if (len < 1e-4) {
+      const f = avant(source.yaw)
+      dx = f.x
+      dz = f.z
+    } else {
+      dx /= len
+      dz /= len
+    }
+    // Vitesse IMPOSEE, pas ajoutee : une cible qui fonce sur l'attaquant
+    // doit partir aussi loin qu'une cible immobile.
+    cible.vel.x = dx * poussee
+    cible.vel.z = dz * poussee
+    cible.vel.y = elan
+    // Sinon le premier tick applique encore la friction du sol.
+    cible.auSol = false
+    cible.stunJusqua = this.temps + (2 * elan) / -GRAVITE + STUN_APRES_ATTERRISSAGE
+    cible.stunDepuis = this.temps
+    cible.finPoussee = cible.stunJusqua
   }
 
   private contenirDansArene(e: Entite): void {
@@ -559,70 +644,109 @@ export class World {
   // --- Combat ---------------------------------------------------------------
 
   /**
-   * Met une attaque « en vol ». Les degats ne tombent qu'a l'impact, un cran
-   * plus tard : entre les deux, encaisser un coup l'annule.
+   * Met une attaque « en vol », si rien ne l'empeche. Les degats ne tombent
+   * qu'a l'impact, un cran plus tard : entre les deux, encaisser un coup
+   * l'annule. Renvoie faux si l'attaque n'est pas partie.
    */
-  private lancerAttaque(e: Entite, type: 'normal' | 'lourd'): void {
-    if (this.temps < e.finRecuperation) return
-    if (e.ruee !== 'aucun' || e.plongeon !== 'aucun') return
-    if (this.temps < e.finEsquive) return
-    if (this.temps - e.dernierCoupA < INTERVALLE_MIN_COUP) return
+  private lancerAttaque(e: Entite, type: 'normal' | 'lourd' | 'tour'): boolean {
+    // Etourdi : ni deplacement ni attaque. Sans ce garde, une cible projetee
+    // a l'epee sortait de sa projection par un plongeon.
+    if (this.temps < e.stunJusqua) return false
+    if (this.temps < e.finRecuperation) return false
+    if (e.ruee !== 'aucun' || e.plongeon !== 'aucun') return false
+    if (this.temps < e.finEsquive) return false
+    // Aucun nouveau coup avant la fin de l'animation du precedent : c'est ce
+    // que montre la jauge sous le reticule.
+    if (this.temps < e.finSwing) return false
 
-    // En l'air, l'epee ne frappe pas : elle plonge.
-    if (e.arme === 'epee' && !e.auSol) {
+    // En l'air, l'epee et la hache ne frappent pas : elles plongent.
+    if (type !== 'tour' && ARMES[e.arme].plonge && !e.auSol) {
       this.lancerPlongeon(e)
-      return
+      return true
     }
 
-    // La charge se lit AVANT d'ecraser la date du dernier coup, sinon elle vaut
-    // toujours zero et tous les coups normaux font les degats minimum.
-    e.chargeDernierCoup = type === 'lourd' ? 1 : chargeDe(e, this.temps)
+    this.demarrerAttaque(e, type)
+    return true
+  }
+
+  /** Lance l'attaque sans verifier les verrous : c'est a l'appelant de le faire. */
+  private demarrerAttaque(e: Entite, type: 'normal' | 'lourd' | 'tour'): void {
+    const arme = ARMES[e.arme]
+    const finPrecedent = e.finSwing
     e.attaqueEnCours = type
     e.dernierCoupA = this.temps
+    e.coupEnAttente = false
 
     if (type === 'lourd') {
       e.attaqueImpactA = this.temps + WINDUP_LOURD
       e.dernierLourdA = this.temps
+      // Consomme le maintien en cours, y compris quand c'est la ruee qui lance
+      // le coup : garder le bouton enfonce n'en relancera pas un second.
+      e.lourdPendantCeMaintien = true
       e.finSwing = this.temps + LOURD_SWING
-      // Immobile pendant tout le coup lourd. C'est son seul cout : il n'a ni
-      // recharge ni ressource, seulement le temps qu'on passe plante.
-      e.finRecuperation = this.temps + LOURD_SWING + LOURD_RECUPERATION
-      e.ralentiJusqua = e.finRecuperation
+      e.comboEtape = -1
+    } else if (type === 'tour') {
+      // 0 -> 1 au lancement, puis 2 et 3 quand les tours s'enchainent.
+      e.tourbillon++
+      e.tourDemande = false
+      e.dernierTourA = this.temps
+      e.attaqueImpactA = this.temps + TOUR_IMPACT
+      // Suppose que c'est le dernier : le tour suivant, s'il vient, repousse
+      // cette fin et saute la recuperation.
+      e.finSwing = this.temps + TOUR_DUREE + TOUR_RECUPERATION
+      e.comboEtape = -1
     } else {
+      // Enchainement : le coup suit le precedent de pres, et il en reste un.
+      const enchaine =
+        e.comboEtape >= 0 &&
+        e.comboEtape < arme.degats.length - 1 &&
+        this.temps <= finPrecedent + COMBO_FENETRE
+      e.comboEtape = enchaine ? e.comboEtape + 1 : 0
       e.attaqueImpactA = this.temps + WINDUP_NORMAL
-      e.finSwing = this.temps + DUREE_SWING
-      e.ralentiJusqua = this.temps + DUREE_RALENTI_ATTAQUANT
+      e.finSwing = this.temps + arme.dureeSwing
     }
+    // Attaquer engage : ralenti exactement le temps du swing. Le coup lourd
+    // et le tourbillon laissent bouger et sauter, mais a cette allure.
+    e.ralentiJusqua = e.finSwing
 
-    this.evenements.push({ type: 'attaque_lancee', entite: e.id, lourd: type === 'lourd' })
+    this.evenements.push({ type: 'attaque_lancee', entite: e.id, attaque: type })
+  }
+
+  /** Le coup lourd lance en dernier n'est pas termine, qu'il ait ete annule ou non. */
+  private enCoupLourd(e: Entite): boolean {
+    return this.temps - e.dernierLourdA < LOURD_SWING
+  }
+
+  /** Un tour est en cours, ou le retour en garde qui suit le dernier. */
+  private enTourbillon(e: Entite): boolean {
+    return e.tourbillon > 0 || (this.temps < e.finSwing && e.dernierCoupA === e.dernierTourA)
+  }
+
+  private esquiveInterdite(e: Entite): boolean {
+    return this.enCoupLourd(e) || this.enTourbillon(e)
+  }
+
+  /** Un clic pendant un coup de l'enchainement demande le suivant. */
+  private peutEnchainer(e: Entite): boolean {
+    return e.comboEtape >= 0 && e.comboEtape < ARMES[e.arme].degats.length - 1 && this.temps < e.finSwing
   }
 
   private resoudreNormal(e: Entite): void {
-    const arme = ARMES[e.arme]
-    const charge = e.chargeDernierCoup
     const cible = cibleDevant(e, this.temps, this.entites.values())
     if (!cible) {
-      this.evenements.push({ type: 'coup_vide', attaquant: e.id, charge })
+      this.evenements.push({ type: 'coup_vide', attaquant: e.id })
       return
     }
-
-    // Critique : frapper en retombant, a charge pleine. Le seul vrai skill-check
-    // du systeme, et il ne depend d'aucune lecture d'animation adverse — donc il
-    // survit au ping (§3).
-    const critique = !e.auSol && e.vel.y < CRIT_VITESSE_CHUTE && charge >= CRIT_CHARGE_MIN
-    let degats = degatsAvecCharge(arme.degats, charge)
-    if (critique) degats *= MULT_CRITIQUE
-
-    this.infligerDegats(cible, e, degats, critique, charge)
+    const degats = ARMES[e.arme].degats
+    const etape = Math.min(Math.max(0, e.comboEtape), degats.length - 1)
+    this.infligerDegats(cible, e, degats[etape]!)
+    // Le dernier coup d'un enchainement projette un peu.
+    if (degats.length > 1 && etape === degats.length - 1 && cible.vivant) {
+      this.projeter(cible, e, LEGERE_POUSSEE, LEGERE_ELAN)
+    }
   }
 
-  private infligerDegats(
-    cible: Entite,
-    attaquant: Entite,
-    degats: number,
-    critique: boolean,
-    charge: number,
-  ): void {
+  private infligerDegats(cible: Entite, attaquant: Entite, degats: number): void {
     cible.pv -= degats
     cible.invulnJusqua = this.temps + INVULN_APRES_COUP
     cible.dernierDegatSubiA = this.temps
@@ -635,9 +759,16 @@ export class World {
     // casse ni les distances ni la lisibilite du combat.
     if (cible.attaqueEnCours !== 'aucun') {
       cible.attaqueEnCours = 'aucun'
+      cible.attaqueAnnuleeA = this.temps
       cible.maintienDepuis = -99
       this.evenements.push({ type: 'attaque_annulee', entite: cible.id })
     }
+    // Et casse ce qu'elle enchainait : le coup suivant du combo, les tours
+    // suivants du tourbillon.
+    cible.comboEtape = -1
+    cible.coupEnAttente = false
+    cible.tourbillon = 0
+    cible.tourDemande = false
     // §2 : la prime se partage entre tous ceux qui ont touche dans les 10 s.
     // Pas de prime sur une map vide, mais la trace est deja la.
     cible.contributeurs.set(attaquant.id, this.temps)
@@ -650,8 +781,6 @@ export class World {
       attaquant: attaquant.id,
       cible: cible.id,
       degats,
-      critique,
-      charge,
       pos: copieV3(cible.pos),
     })
 
@@ -659,28 +788,27 @@ export class World {
   }
 
   /**
-   * Attaque sautee a l'epee. Deux temps : une suspension pendant laquelle le
-   * personnage se fige en l'air — c'est la seule vraie fenetre de telegraphe du
-   * jeu, et elle ne coute rien au ping puisque c'est l'attaquant qui s'immobilise —
-   * puis une chute verticale rapide sur sa propre position.
+   * Attaque sautee a l'epee ou a la hache. Deux temps : une suspension pendant
+   * laquelle le personnage se fige en l'air — c'est la seule vraie fenetre de
+   * telegraphe du jeu, et elle ne coute rien au ping puisque c'est l'attaquant
+   * qui s'immobilise — puis une chute verticale rapide sur sa propre position.
    */
   private lancerPlongeon(e: Entite): void {
     e.plongeon = 'suspension'
     e.finSuspension = this.temps + PLONGEON_SUSPENSION
-    // Consomme la recharge : on ne plonge pas pour enchainer un coup charge.
-    e.dernierCoupA = this.temps
-    e.finSwing = this.temps + PLONGEON_SUSPENSION
-    e.chargeDernierCoup = 1
+    e.comboEtape = -1
+    e.coupEnAttente = false
     this.evenements.push({ type: 'plongeon', entite: e.id })
   }
 
   private impactPlongeon(e: Entite): void {
     e.plongeon = 'aucun'
     e.dernierPlongeonA = this.temps
-    e.ralentiJusqua = this.temps + DUREE_RALENTI_ATTAQUANT
     e.finRecuperation = this.temps + RECUPERATION_PLONGEON
+    // L'animation du plongeon se termine avec sa recuperation : la jauge se
+    // remplit pendant ce temps-la.
     e.dernierCoupA = this.temps
-    e.finSwing = this.temps + DUREE_SWING
+    e.finSwing = e.finRecuperation
     e.vel.x = 0
     e.vel.z = 0
 
@@ -700,7 +828,7 @@ export class World {
       const cos = (f.x * vx + f.z * vz) / len
       if (Math.acos(Math.max(-1, Math.min(1, cos))) > PLONGEON_DEMI_ANGLE) continue
 
-      this.infligerDegats(c, e, PLONGEON_DEGATS, true, 1)
+      this.infligerDegats(c, e, PLONGEON_DEGATS)
       if (c.vivant) {
         c.stunJusqua = this.temps + PLONGEON_STUN
         c.stunDepuis = this.temps
@@ -785,10 +913,17 @@ export class World {
     e.plongeon = 'aucun'
     e.dernierPlongeonA = -99
     e.finRecuperation = -99
+    e.sautInterditJusqua = -99
     e.maintienDepuis = -99
     e.lourdPendantCeMaintien = false
     e.dernierLourdA = -99
     e.attaqueEnCours = 'aucun'
+    e.attaqueAnnuleeA = -99
+    e.comboEtape = -1
+    e.coupEnAttente = false
+    e.tourbillon = 0
+    e.tourDemande = false
+    e.dernierTourA = -99
     e.ruee = 'aucun'
     e.finPoussee = -99
     e.yaw = Math.atan2(e.pos.x, e.pos.z)
@@ -798,7 +933,8 @@ export class World {
     e.dernierDegatSubiA = -99
     e.contributeurs.clear()
     e.entree.attaqueMaintenue = false
-    e.entree.ruee = false
+    e.entree.speciale = false
+    e.entree.specialeMaintenue = false
     this.evenements.push({ type: 'apparition', entite: e.id })
   }
 

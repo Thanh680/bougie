@@ -1,18 +1,21 @@
 import * as pc from 'playcanvas'
 import {
+  ARMES,
   DUREE_ESQUIVE,
-  DUREE_SWING,
   HAUTEUR_ENTITE,
   LOURD_SWING,
   PLONGEON_PORTEE,
   RAYON_ENTITE,
   RECUPERATION_PLONGEON,
+  TOUR_DUREE,
+  TOUR_IMPACT,
   WINDUP_LOURD,
   WINDUP_NORMAL,
   clamp,
   deltaAngle,
   lerp,
   palierDe,
+  type ArmeId,
   type Entite,
   type EntityId,
   type Evenement,
@@ -31,13 +34,18 @@ const RAD_TO_DEG = 180 / Math.PI
 const LISSAGE_POS = 60
 
 /**
- * Animation d'attaque.
+ * Animation d'attaque, en trois temps comme dans un jeu de combat : armement,
+ * frappe, retour.
  *
- * Contrainte : le coup est INSTANTANE cote simulation (c'est ce qui le rend
- * insensible au ping, §3). L'animation ne peut donc pas commencer par une
- * armee — les degats sont deja passes. Elle claque directement dans la frappe
- * et prend son temps sur le retour : le mouvement reste lisible sans jamais
- * raconter autre chose que ce qui s'est reellement produit.
+ * L'armement occupe le debut du delai d'impact (WINDUP_*) : c'est lui qui
+ * annonce le coup, et c'est sa duree qui rend un coup lourd lent a l'oeil. La
+ * frappe est courte et accelere jusqu'a l'impact : la lame arrive sur la cible
+ * exactement quand la simulation applique les degats. Le retour prend son
+ * temps, c'est lui qui donne du poids au geste.
+ *
+ * Un coup annule ne joue jamais sa frappe : la pose revient au repos depuis la
+ * ou elle a ete interrompue, et y arrive a la fin du swing, quand la jauge
+ * sous le reticule est pleine. Un swing visible vaut toujours un coup reel.
  */
 // Rotation du pivot autour de X. Positif = lame levee, negatif = lame baissee :
 // le swing est une taille descendante, de haut en arriere vers bas en avant.
@@ -46,27 +54,61 @@ const ARME_ARMEE = 150
 const ARME_FRAPPE = -55
 const TORSE_ARME = 30
 const TORSE_FRAPPE = -32
-/**
- * Part du swing consacree a la frappe. Le reste est le retour.
- * Cale sur WINDUP_NORMAL / DUREE_SWING : la lame doit arriver sur la cible
- * exactement au moment ou la simulation applique les degats.
- */
-const PART_FRAPPE = WINDUP_NORMAL / DUREE_SWING
-/** Idem pour le coup lourd. */
-const PART_FRAPPE_LOURD = WINDUP_LOURD / LOURD_SWING
+/** Duree de la frappe proprement dite, a la fin du delai d'impact. Tout ce qui
+ *  la precede est de l'armement visible. */
+const FRAPPE_NORMAL = 0.08
+const FRAPPE_LOURD = 0.12
 
 /**
  * Coup lourd : lacet de la lame, en degres, autour de l'axe VERTICAL.
- * -125 = bras arme sur la droite, +30 = lame devant, legerement a gauche.
- * Le balayage passe donc franchement devant le personnage.
+ * -34 = garde, la meme direction que celle du coup normal pour qu'on passe de
+ * l'un a l'autre sans saut. -125 = bras arme sur la droite, +30 = lame devant,
+ * legerement a gauche. Le balayage passe donc franchement devant le personnage.
  */
-const LOURD_DEPART = -125
-const LOURD_ARRIVEE = 30
+const LOURD_REPOS = -34
+const LOURD_ARME = -125
+const LOURD_IMPACT = 30
+/** Inclinaison du buste : en arriere a l'armement, jete en avant a l'impact. */
+const LOURD_PENCHE_ARME = 5
+const LOURD_PENCHE_IMPACT = -8
+
+/**
+ * Longue hache, enchainement facon Counter Sword : trois gestes differents.
+ * Les deux balayages tournent autour de l'axe vertical (lacet de la lame) ; la
+ * taille finale tourne autour de X dans le plan diagonal, comme l'epee.
+ */
+const HACHE_REPOS = -34
+const HACHE_BALAYAGE_ARME = -115
+const HACHE_BALAYAGE_IMPACT = 45
+const HACHE_REVERS_ARME = 60
+const HACHE_REVERS_IMPACT = -125
+const HACHE_TAILLE_ARMEE = 160
+const HACHE_TAILLE_IMPACT = -60
+/**
+ * Coup lourd a la hache : un uppercut, de la lame au ras du sol a droite a la
+ * lame au-dessus de la tete a gauche, dans le plan diagonal montant.
+ */
+const UPPERCUT_ARME = -100
+const UPPERCUT_IMPACT = 120
+/** Tourbillon : la hache tendue sur le cote droit, le corps fait un tour complet par tour. */
+const TOURBILLON_LACET = -90
 
 /** Cote du cube qui sert de gant. */
 const GANT = 0.24
+/** Recul du gant pendant l'armement, en fraction de l'allonge. */
+const GANT_ARME = -0.3
+const GANT_ARME_LOURD = -0.45
 
 const DUREE_ONDE = 0.38
+
+interface Pose {
+  /** Torsion du torse (lacet), en degres. */
+  torsion: number
+  /** Inclinaison du torse : positif = en arriere, negatif = en avant. */
+  penche: number
+  /** La pointe de lame trace sa trainee a cette frame. */
+  trainee: boolean
+}
 
 interface StylePalier {
   couleur: pc.Color
@@ -91,12 +133,19 @@ interface Vue {
   pivotArme: pc.Entity
   arme: pc.Entity
   pointe: pc.Entity
+  /** Longue hache : manche et lame, sous le meme pivot que l'epee. */
+  hache: pc.Entity
+  pointeHache: pc.Entity
+  /** Materiau des lames, epee comme hache : c'est lui qui porte l'eclat des coups. */
   matArme: pc.StandardMaterial
   /** Les deux bras existent toujours. Seul celui qui frappe s'allonge. */
   bras: [pc.Entity, pc.Entity]
   membres: [pc.Entity, pc.Entity]
   /** Alterne a chaque coup de poing : sinon on frappe toujours du meme bras. */
   poingGauche: boolean
+  /** Rang du coup de hache en cours, fige a son depart : la sim remet son
+   *  enchainement a zero quand on encaisse, le geste en cours ne doit pas changer. */
+  etapeCombo: number
   dernierCoupVu: number
   aura: pc.Entity
   matAura: pc.StandardMaterial
@@ -273,6 +322,29 @@ export class Acteurs {
     const pointe = new pc.Entity('pointe')
     arme.addChild(pointe)
 
+    // Longue hache : un manche long et une lame plate en bout, dans le metal
+    // de l'epee pour que l'eclat des coups s'y lise pareil. Lame haute plutot
+    // que tranchante dans l'axe du coup : depuis la camera, c'est la surface
+    // qui se voit, pas le fil.
+    const hache = new pc.Entity('hache')
+    pivotArme.addChild(hache)
+    const manche = new pc.Entity('manche')
+    manche.addComponent('render', { type: 'box' })
+    appliquerMateriau(manche, materiau({ diffuse: new pc.Color(0.45, 0.32, 0.2) }))
+    manche.setLocalScale(0.07, 0.07, 1.5)
+    manche.setLocalPosition(0, 0, -0.6)
+    hache.addChild(manche)
+    const lame = new pc.Entity('lame-hache')
+    lame.addComponent('render', { type: 'box' })
+    appliquerMateriau(lame, matArme)
+    lame.setLocalScale(0.05, 0.42, 0.3)
+    lame.setLocalPosition(0, 0.16, -1.2)
+    hache.addChild(lame)
+    const pointeHache = new pc.Entity('pointe-hache')
+    pointeHache.setLocalPosition(0, 0.37, -1.2)
+    hache.addChild(pointeHache)
+    hache.enabled = false
+
     // Aura de palier : disque au sol + colonne de lumiere.
     const aura = new pc.Entity('aura')
     aura.addComponent('render', { type: 'cylinder', castShadows: false })
@@ -309,12 +381,15 @@ export class Acteurs {
       pivotArme,
       arme,
       pointe,
+      hache,
+      pointeHache,
       matArme,
       planLacet,
       planRoulis,
       bras,
       membres,
       poingGauche: false,
+      etapeCombo: 0,
       dernierCoupVu: -99,
       aura,
       matAura,
@@ -361,13 +436,15 @@ export class Acteurs {
     this.majTorse(vue, e, temps, dt, pose.torsion, pose.penche)
     this.majCorps(vue, e, temps)
     this.majAura(vue, e, temps)
-    this.majTrainee(vue, e, temps)
+    this.majTrainee(vue, pose.trainee, e.arme === 'hache' ? vue.pointeHache : vue.pointe)
   }
 
-  /** Retourne la torsion (Y) et l'inclinaison avant (X) du torse pour cette frame. */
-  private majArme(vue: Vue, e: Entite, temps: number): { torsion: number; penche: number } {
+  /** Pose l'arme et les gants, et retourne ce que le torse doit en faire. */
+  private majArme(vue: Vue, e: Entite, temps: number): Pose {
     const epee = e.arme === 'epee'
+    const hache = e.arme === 'hache'
     vue.arme.enabled = epee
+    vue.hache.enabled = hache
     if (epee) {
       // Lame plate et large : une tige de 8 cm qui balaie en trois images ne se
       // voit pas, une lame de 22 cm de large accroche la lumiere.
@@ -380,14 +457,15 @@ export class Acteurs {
     if (vue.dernierCoupVu !== e.dernierCoupA) {
       vue.dernierCoupVu = e.dernierCoupA
       vue.poingGauche = !vue.poingGauche
+      vue.etapeCombo = Math.max(0, e.comboEtape)
     }
 
     // Les deux gants reviennent d'abord en garde ; les poses qui suivent ne
     // touchent qu'a ce qu'elles animent vraiment.
     this.gantsAuRepos(vue, temps)
-    // A l'epee, pas de gants du tout : la lame porte toute l'animation.
-    vue.membres[0]!.enabled = !epee
-    vue.membres[1]!.enabled = !epee
+    // Arme en main, pas de gants du tout : la lame porte toute l'animation.
+    vue.membres[0]!.enabled = e.arme === 'poings'
+    vue.membres[1]!.enabled = e.arme === 'poings'
 
     // L'armement n'existe plus comme etat separe : le coup lourd est lance des
     // que le maintien est reconnu, et son propre swing sert de telegraphe.
@@ -399,16 +477,22 @@ export class Acteurs {
     // La pose de plongeon est en plus conditionnee a un vrai plongeon recent,
     // pas a une recuperation quelconque.
     const recuperationPlongeon = temps - e.dernierPlongeonA < RECUPERATION_PLONGEON
+    // Un tour, ou le retour en garde qui suit le dernier.
+    const enTourbillon = e.dernierCoupA === e.dernierTourA && temps < e.finSwing
 
-    let resultat: { torsion: number; penche: number }
+    let resultat: Pose
     if (e.ruee === 'course') {
       resultat = poseRuee(vue)
     } else if (enLourd) {
-      resultat = this.poseLourd(vue, e, temps, epee)
+      resultat = this.poseLourd(vue, e, temps, e.arme)
     } else if (e.plongeon !== 'aucun' || recuperationPlongeon) {
       resultat = this.poseplongeon(vue, e, temps)
+    } else if (enTourbillon) {
+      resultat = this.poseTourbillon(vue, e, temps)
     } else if (epee) {
       resultat = this.poseEpee(vue, e, temps)
+    } else if (hache) {
+      resultat = this.poseHache(vue, e, temps)
     } else {
       resultat = this.posePoing(vue, e, temps)
     }
@@ -440,13 +524,15 @@ export class Acteurs {
   }
 
   /**
-   * Projette un gant DROIT DEVANT. `ext` va de 0 (garde) a 1 (bras tendu).
+   * Projette un gant DROIT DEVANT. `ext` va de 0 (garde) a 1 (bras tendu) ;
+   * negatif, le gant recule vers l'epaule pour s'armer.
    * Aucune derive laterale : le coup part vers le reticule, pas en diagonale.
    */
   private lancerGant(vue: Vue, gauche: boolean, ext: number, allonge: number): void {
     const i = gauche ? 0 : 1
+    const grossi = GANT * (1 + 0.15 * Math.max(0, ext))
     vue.membres[i]!.setLocalPosition(0, 0, -0.26 - allonge * ext)
-    vue.membres[i]!.setLocalScale(GANT * (1 + 0.15 * ext), GANT * (1 + 0.15 * ext), GANT)
+    vue.membres[i]!.setLocalScale(grossi, grossi, GANT)
   }
 
   /**
@@ -455,106 +541,153 @@ export class Acteurs {
    * camera regarde par la tranche — il y est invisible quelle que soit son
    * ampleur. Le lacet du plan est ce qui le tourne vers l'objectif.
    */
-  private poseEpee(vue: Vue, e: Entite, temps: number): { torsion: number; penche: number } {
-    vue.planLacet.setLocalPosition(RAYON_ENTITE * 0.8, HAUTEUR_ENTITE * 0.62, 0)
-    vue.planLacet.setLocalEulerAngles(0, -34, 0)
-    vue.planRoulis.setLocalEulerAngles(0, 0, -45)
+  private poseEpee(vue: Vue, e: Entite, temps: number): Pose {
+    planDiagonal(vue)
     vue.arme.setLocalPosition(0, 0, -0.52)
 
-    const t = clamp((temps - e.dernierCoupA) / DUREE_SWING, 0, 1)
-    let angle: number
-    let torsion: number
-    let eclat = 0
-
-    if (t < PART_FRAPPE) {
-      // Frappe : la lame part deja armee et balaie 205 deg en deux images.
-      const p = t / PART_FRAPPE
-      const k = 1 - (1 - p) ** 3
-      angle = lerp(ARME_ARMEE, ARME_FRAPPE, k)
-      torsion = lerp(TORSE_ARME, TORSE_FRAPPE, k)
-      eclat = 1 - p
-    } else {
-      // Retour : lent et visible, c'est lui qui donne son poids au coup.
-      const p = (t - PART_FRAPPE) / (1 - PART_FRAPPE)
-      const k = p * p * (3 - 2 * p)
-      angle = lerp(ARME_FRAPPE, ARME_REPOS, k)
-      torsion = lerp(TORSE_FRAPPE, 0, k)
-    }
-
-    vue.pivotArme.setLocalEulerAngles(angle, 0, 0)
+    // Armement : la lame monte au-dessus de l'epaule. Frappe : elle balaie
+    // 205 deg en accelerant jusqu'a l'impact. Retour : lent, c'est lui qui
+    // donne son poids au coup.
+    const c = coupNormal(e, temps)
+    vue.pivotArme.setLocalEulerAngles(c.val(ARME_REPOS, ARME_ARMEE, ARME_FRAPPE), 0, 0)
+    // L'eclat culmine a l'impact, pas au depart du geste.
+    const eclat = c.phase === 'frappe' ? c.k : c.phase === 'retour' ? Math.max(0, 1 - c.k * 3) : 0
     vue.matArme.emissive.set(eclat * 0.9, eclat * 0.95, eclat)
-    return { torsion, penche: 0 }
+    return { torsion: c.val(0, TORSE_ARME, TORSE_FRAPPE), penche: 0, trainee: traineeSur(c) }
   }
 
   /**
-   * Poings : un coup droit, pas une taille. Le bras part de l'epaule et se
-   * detend DEVANT, en ligne droite, avec l'epaule opposee qui suit. Les deux
-   * poings alternent.
+   * Poings : un coup droit, pas une taille. Le gant recule pour s'armer, puis
+   * part DEVANT, en ligne droite. Les deux poings alternent.
    */
-  private posePoing(vue: Vue, e: Entite, temps: number): { torsion: number; penche: number } {
+  private posePoing(vue: Vue, e: Entite, temps: number): Pose {
     // Plans neutres : un coup droit n'a pas de plan de balayage.
     vue.planRoulis.setLocalEulerAngles(0, 0, 0)
     vue.planLacet.setLocalEulerAngles(0, 0, 0)
     vue.pivotArme.setLocalEulerAngles(0, 0, 0)
 
-    const t = clamp((temps - e.dernierCoupA) / DUREE_SWING, 0, 1)
-    let extension: number
-    if (t < PART_FRAPPE) {
-      const p = t / PART_FRAPPE
-      extension = 1 - (1 - p) ** 3
-    } else {
-      const p = (t - PART_FRAPPE) / (1 - PART_FRAPPE)
-      extension = 1 - p * p * (3 - 2 * p)
-    }
-
-    this.lancerGant(vue, vue.poingGauche, extension, 0.66)
+    const c = coupNormal(e, temps)
+    this.lancerGant(vue, vue.poingGauche, c.val(0, GANT_ARME, 1), 0.66)
     // Aucune torsion du buste : elle ferait pivoter la trajectoire du gant et
     // le coup partirait en diagonale au lieu de partir droit devant.
-    return { torsion: 0, penche: 0 }
+    return { torsion: 0, penche: 0, trainee: false }
   }
 
-  /** Coup lourd : un balayage large et lent, bien plus ample que le coup normal. */
-  private poseLourd(
-    vue: Vue,
-    e: Entite,
-    temps: number,
-    epee: boolean,
-  ): { torsion: number; penche: number } {
-    const t = clamp((temps - e.dernierLourdA) / LOURD_SWING, 0, 1)
-    const frappe = PART_FRAPPE_LOURD
-    let k: number
-    let retour: boolean
-    if (t < frappe) {
-      k = 1 - (1 - t / frappe) ** 3
-      retour = false
-    } else {
-      const p = (t - frappe) / (1 - frappe)
-      k = 1 - p * p * (3 - 2 * p)
-      retour = true
+  /**
+   * Longue hache, enchainement facon Counter Sword : balayage de droite a
+   * gauche, revers de gauche a droite, puis taille verticale par-dessus la
+   * tete, qui projette. Le geste est celui du rang fige au depart du coup.
+   */
+  private poseHache(vue: Vue, e: Entite, temps: number): Pose {
+    const c = coupNormal(e, temps)
+    const eclat = c.phase === 'frappe' ? c.k : c.phase === 'retour' ? Math.max(0, 1 - c.k * 3) : 0
+    vue.matArme.emissive.set(eclat * 0.9, eclat * 0.95, eclat)
+
+    if (vue.etapeCombo < 2) {
+      planHorizontal(vue)
+      const aller = vue.etapeCombo === 0
+      const lacet = aller
+        ? c.val(HACHE_REPOS, HACHE_BALAYAGE_ARME, HACHE_BALAYAGE_IMPACT)
+        : c.val(HACHE_REPOS, HACHE_REVERS_ARME, HACHE_REVERS_IMPACT)
+      vue.pivotArme.setLocalEulerAngles(0, lacet, 0)
+      const torsion = aller ? c.val(0, 25, -30) : c.val(0, -25, 30)
+      return { torsion, penche: 0, trainee: traineeSur(c) }
     }
 
-    if (epee) {
-      // Balayage HORIZONTAL, autour de l'axe vertical : la lame part de la
-      // droite et finit DEVANT. Le coup precedent tournait autour de l'axe
-      // lateral et terminait pointe au sol, ce qui ne ressemblait pas a un coup
-      // porte devant soi.
-      vue.planLacet.setLocalPosition(RAYON_ENTITE * 0.7, HAUTEUR_ENTITE * 0.6, 0)
-      vue.planLacet.setLocalEulerAngles(0, 0, 0)
-      vue.planRoulis.setLocalEulerAngles(0, 0, -14)
-      vue.arme.setLocalPosition(0, 0, -0.52)
-      vue.pivotArme.setLocalEulerAngles(0, lerp(LOURD_DEPART, LOURD_ARRIVEE, k), 0)
-      const eclat = retour ? 0 : 1 - t / frappe
-      vue.matArme.emissive.set(eclat, eclat * 0.9, eclat * 0.6)
-    } else {
-      this.lancerGant(vue, false, k, 0.82)
-      return { torsion: 0, penche: -6 * k }
+    // La taille finale passe dans le plan diagonal de l'epee : verticale, elle
+    // serait vue par la tranche depuis la camera.
+    planDiagonal(vue)
+    vue.pivotArme.setLocalEulerAngles(c.val(ARME_REPOS, HACHE_TAILLE_ARMEE, HACHE_TAILLE_IMPACT), 0, 0)
+    return { torsion: c.val(0, 20, -20), penche: c.val(0, 6, -14), trainee: traineeSur(c) }
+  }
+
+  /**
+   * Coup lourd : un geste large et lent, bien plus ample que le coup normal.
+   * Son long armement est le seul vrai telegraphe du corps a corps : la lame
+   * part loin et s'embrase jusqu'a la frappe.
+   */
+  private poseLourd(vue: Vue, e: Entite, temps: number, arme: ArmeId): Pose {
+    const c = coupLourd(e, temps)
+    const penche = c.val(0, LOURD_PENCHE_ARME, LOURD_PENCHE_IMPACT)
+
+    if (arme === 'poings') {
+      this.lancerGant(vue, false, c.val(0, GANT_ARME_LOURD, 1), 0.82)
+      return { torsion: 0, penche, trainee: false }
     }
 
-    return { torsion: lerp(34, -38, k), penche: -6 * k }
+    const eclat =
+      c.phase === 'armement'
+        ? 0.5 * c.k
+        : c.phase === 'frappe'
+          ? 0.5 + 0.5 * c.k
+          : c.phase === 'retour'
+            ? Math.max(0, 1 - c.k * 3)
+            : 0
+    vue.matArme.emissive.set(eclat, eclat * 0.9, eclat * 0.6)
+
+    if (arme === 'hache') {
+      // Uppercut facon Counter Sword : la lame part du ras du sol et remonte
+      // devant jusqu'au-dessus de la tete. Accroupi a l'armement, le buste se
+      // redresse avec le coup.
+      planDiagonalMontant(vue)
+      vue.pivotArme.setLocalEulerAngles(c.val(ARME_REPOS, UPPERCUT_ARME, UPPERCUT_IMPACT), 0, 0)
+      return { torsion: c.val(0, 20, -20), penche: c.val(0, -10, 10), trainee: traineeSur(c) }
+    }
+
+    // Balayage HORIZONTAL, autour de l'axe vertical : la lame part de la
+    // droite et finit DEVANT. Le coup precedent tournait autour de l'axe
+    // lateral et terminait pointe au sol, ce qui ne ressemblait pas a un coup
+    // porte devant soi.
+    planHorizontal(vue)
+    vue.arme.setLocalPosition(0, 0, -0.52)
+    vue.pivotArme.setLocalEulerAngles(0, c.val(LOURD_REPOS, LOURD_ARME, LOURD_IMPACT), 0)
+    return { torsion: c.val(0, 34, -38), penche, trainee: traineeSur(c) }
+  }
+
+  /**
+   * Tourbillon : la hache tendue sur le cote, le corps fait un tour complet par
+   * tour, a vitesse constante pour que les tours s'enchainent sans a-coup.
+   * Apres le dernier, la hache revient en garde pour la fin de la jauge.
+   */
+  private poseTourbillon(vue: Vue, e: Entite, temps: number): Pose {
+    planHorizontal(vue)
+    const ecoule = temps - e.dernierTourA
+    const duree = e.finSwing - e.dernierTourA
+    const annuleA = annulationDe(e, e.dernierTourA)
+
+    // Angle du corps et lacet de la hache a un instant du tour.
+    const pose = (t: number): { tour: number; lacet: number } => {
+      if (t < TOUR_DUREE) return { tour: (-360 * t) / TOUR_DUREE, lacet: TOURBILLON_LACET }
+      const p = lisse(clamp((t - TOUR_DUREE) / (duree - TOUR_DUREE), 0, 1))
+      return { tour: 0, lacet: lerp(TOURBILLON_LACET, HACHE_REPOS, p) }
+    }
+
+    let tour: number
+    let lacet: number
+    let trainee = false
+    if (annuleA !== null && ecoule >= annuleA) {
+      // Coup encaisse avant l'impact : le tour s'arrete net et revient en garde.
+      const fige = pose(annuleA)
+      const p = lisse(clamp((ecoule - annuleA) / (duree - annuleA), 0, 1))
+      tour = lerp(fige.tour, 0, p)
+      lacet = lerp(fige.lacet, HACHE_REPOS, p)
+      vue.matArme.emissive.set(0, 0, 0)
+    } else {
+      const courant = pose(ecoule)
+      tour = courant.tour
+      lacet = courant.lacet
+      trainee = ecoule < TOUR_DUREE
+      // L'eclat culmine a l'impact, au milieu du tour.
+      const eclat = Math.max(0, 1 - Math.abs(ecoule - TOUR_IMPACT) / 0.15)
+      vue.matArme.emissive.set(eclat * 0.9, eclat * 0.95, eclat)
+    }
+
+    vue.pivotArme.setLocalEulerAngles(0, lacet, 0)
+    return { torsion: tour, penche: -4, trainee }
   }
 
   /** Plongeon : lame haute, puis pointee vers le bas, puis plantee dans le sol. */
-  private poseplongeon(vue: Vue, e: Entite, temps: number): { torsion: number; penche: number } {
+  private poseplongeon(vue: Vue, e: Entite, temps: number): Pose {
     // Plans neutres : la lame doit etre franchement verticale, pas en diagonale.
     vue.planLacet.setLocalEulerAngles(0, 0, 0)
     vue.planRoulis.setLocalEulerAngles(0, 0, 0)
@@ -565,14 +698,14 @@ export class Acteurs {
       vue.planLacet.setLocalPosition(RAYON_ENTITE * 0.5, HAUTEUR_ENTITE * 0.62, 0)
       vue.pivotArme.setLocalEulerAngles(95, 0, 0) // lame droite au-dessus de la tete
       vue.matArme.emissive.set(0.9, 0.9, 1)
-      return { torsion: 0, penche: 12 }
+      return { torsion: 0, penche: 12, trainee: false }
     }
 
     if (e.plongeon === 'chute') {
       vue.planLacet.setLocalPosition(0.42, HAUTEUR_ENTITE * 0.62, -0.35)
       vue.pivotArme.setLocalEulerAngles(-90, 0, 0) // pointe vers le bas
       vue.matArme.emissive.set(0.9, 0.9, 1)
-      return { torsion: 0, penche: -16 }
+      return { torsion: 0, penche: -16, trainee: false }
     }
 
     // Recuperation : l'epee reste plantee dans le sol devant, le corps penche
@@ -584,7 +717,7 @@ export class Acteurs {
     vue.pivotArme.setLocalEulerAngles(-90, 0, 0)
     const lueur = 1 - p
     vue.matArme.emissive.set(lueur * 0.7, lueur * 0.6, lueur * 0.35)
-    return { torsion: 0, penche: lerp(-30, -5, p * p) }
+    return { torsion: 0, penche: lerp(-30, -5, p * p), trainee: false }
   }
 
   private majTorse(
@@ -664,20 +797,13 @@ export class Acteurs {
     }
   }
 
-  /** Echantillonne la pointe de lame pendant la phase de frappe. */
-  private majTrainee(vue: Vue, e: Entite, temps: number): void {
-    const t = (temps - e.dernierCoupA) / DUREE_SWING
-    const frappe =
-      e.arme === 'epee' &&
-      e.plongeon === 'aucun' &&
-      temps >= e.finRecuperation &&
-      t >= 0 &&
-      t < PART_FRAPPE * 1.8
-    if (!frappe) {
+  /** Echantillonne la pointe de lame pendant la frappe, pas pendant l'armement. */
+  private majTrainee(vue: Vue, actif: boolean, pointe: pc.Entity): void {
+    if (!actif) {
       if (vue.trainee.length > 0) vue.trainee.length = 0
       return
     }
-    vue.trainee.push(vue.pointe.getPosition().clone())
+    vue.trainee.push(pointe.getPosition().clone())
     if (vue.trainee.length > 14) vue.trainee.shift()
   }
 
@@ -738,8 +864,37 @@ export class Acteurs {
   }
 }
 
+/**
+ * Plan de la taille : une diagonale qui balaie vers l'avant-droit. Un plan qui
+ * contient l'axe avant est vu par la tranche depuis la camera : c'est le lacet
+ * qui le tourne vers elle.
+ */
+function planDiagonal(vue: Vue): void {
+  vue.planLacet.setLocalPosition(RAYON_ENTITE * 0.8, HAUTEUR_ENTITE * 0.62, 0)
+  vue.planLacet.setLocalEulerAngles(0, -34, 0)
+  vue.planRoulis.setLocalEulerAngles(0, 0, -45)
+}
+
+/**
+ * Miroir du plan de la taille, pour les coups qui montent. Dans le plan de la
+ * taille, « en bas » veut dire en bas a gauche : la lame y passe derriere la
+ * capsule, invisible depuis la camera. Ici, en bas veut dire en bas a droite.
+ */
+function planDiagonalMontant(vue: Vue): void {
+  vue.planLacet.setLocalPosition(RAYON_ENTITE * 0.8, HAUTEUR_ENTITE * 0.62, 0)
+  vue.planLacet.setLocalEulerAngles(0, -34, 0)
+  vue.planRoulis.setLocalEulerAngles(0, 0, 45)
+}
+
+/** Plan des balayages : horizontal, a peine incline, autour de l'axe vertical. */
+function planHorizontal(vue: Vue): void {
+  vue.planLacet.setLocalPosition(RAYON_ENTITE * 0.7, HAUTEUR_ENTITE * 0.6, 0)
+  vue.planLacet.setLocalEulerAngles(0, 0, 0)
+  vue.planRoulis.setLocalEulerAngles(0, 0, -14)
+}
+
 /** Ruee : buste jete en avant, bras en arriere, arme pointee devant. */
-function poseRuee(vue: Vue): { torsion: number; penche: number } {
+function poseRuee(vue: Vue): Pose {
   vue.planLacet.setLocalPosition(RAYON_ENTITE * 0.8, HAUTEUR_ENTITE * 0.6, 0)
   vue.planLacet.setLocalEulerAngles(0, 0, 0)
   vue.planRoulis.setLocalEulerAngles(0, 0, -12)
@@ -748,7 +903,93 @@ function poseRuee(vue: Vue): { torsion: number; penche: number } {
   vue.matArme.emissive.set(0.5, 0.5, 0.6)
   // Gants ramenes en arriere : le corps est jete en avant, les mains suivent.
   for (let i = 0; i < 2; i++) vue.membres[i]!.setLocalPosition((i === 0 ? -1 : 1) * 0.02, -0.05, 0.16)
-  return { torsion: 0, penche: -34 }
+  return { torsion: 0, penche: -34, trainee: false }
+}
+
+// --- Chronologie d'un coup ----------------------------------------------------
+
+type Phase = 'repos' | 'armement' | 'frappe' | 'retour' | 'annule'
+
+interface Coup {
+  phase: Phase
+  /** Progression lissee dans la phase, de 0 a 1. */
+  k: number
+  /** Valeur d'un canal d'animation a trois poses : repos -> armee -> impact -> repos. */
+  val(repos: number, armee: number, impact: number): number
+}
+
+const REPOS: Coup = { phase: 'repos', k: 0, val: (repos) => repos }
+
+function coupNormal(e: Entite, temps: number): Coup {
+  // Le dernier coup etait un coup lourd, un plongeon ou un tour : rien a jouer ici.
+  if (
+    e.dernierCoupA === e.dernierLourdA ||
+    e.dernierCoupA === e.dernierPlongeonA ||
+    e.dernierCoupA === e.dernierTourA
+  ) {
+    return REPOS
+  }
+  const duree = ARMES[e.arme].dureeSwing
+  return lireCoup(temps - e.dernierCoupA, WINDUP_NORMAL, FRAPPE_NORMAL, duree, annulationDe(e, e.dernierCoupA))
+}
+
+function coupLourd(e: Entite, temps: number): Coup {
+  return lireCoup(temps - e.dernierLourdA, WINDUP_LOURD, FRAPPE_LOURD, LOURD_SWING, annulationDe(e, e.dernierLourdA))
+}
+
+/** Temps ecoule entre le lancement du coup et son annulation, ou null s'il a porte. */
+function annulationDe(e: Entite, lanceA: number): number | null {
+  return e.attaqueAnnuleeA >= lanceA ? e.attaqueAnnuleeA - lanceA : null
+}
+
+/**
+ * Ou en est un coup lance il y a `ecoule` secondes. L'impact tombe a `windup`,
+ * precede d'une frappe de duree `frappe` ; tout ce qui vient avant est l'armement.
+ */
+function lireCoup(ecoule: number, windup: number, frappe: number, duree: number, annuleA: number | null): Coup {
+  if (annuleA !== null && ecoule >= annuleA) {
+    // Fige la pose au moment de l'annulation, puis la ramene au repos pour la
+    // fin du swing : le verrou d'attaque, lui, court toujours jusque-la.
+    const fige = lireCoup(annuleA, windup, frappe, duree, null)
+    const k = lisse(clamp((ecoule - annuleA) / (duree - annuleA), 0, 1))
+    return { phase: 'annule', k, val: (r, a, i) => lerp(fige.val(r, a, i), r, k) }
+  }
+
+  const debutFrappe = windup - frappe
+  let phase: Phase
+  let k: number
+  if (ecoule < 0 || ecoule >= duree) {
+    phase = 'repos'
+    k = 0
+  } else if (ecoule < debutFrappe) {
+    phase = 'armement'
+    k = lisse(ecoule / debutFrappe)
+  } else if (ecoule < windup) {
+    // Acceleration jusqu'a l'impact : la vitesse maximale tombe sur le coup.
+    const p = (ecoule - debutFrappe) / frappe
+    phase = 'frappe'
+    k = p * p
+  } else {
+    phase = 'retour'
+    k = lisse((ecoule - windup) / (duree - windup))
+  }
+  return { phase, k, val: (r, a, i) => canal(phase, k, r, a, i) }
+}
+
+function canal(phase: Phase, k: number, repos: number, armee: number, impact: number): number {
+  if (phase === 'armement') return lerp(repos, armee, k)
+  if (phase === 'frappe') return lerp(armee, impact, k)
+  if (phase === 'retour') return lerp(impact, repos, k)
+  return repos
+}
+
+/** La trainee accompagne la frappe et le tout debut du retour. */
+function traineeSur(c: Coup): boolean {
+  return c.phase === 'frappe' || (c.phase === 'retour' && c.k < 0.3)
+}
+
+function lisse(p: number): number {
+  return p * p * (3 - 2 * p)
 }
 
 function distance(a: pc.Vec3, e: Entite): number {

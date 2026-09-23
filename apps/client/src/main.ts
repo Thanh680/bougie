@@ -56,7 +56,9 @@ app.on('update', (dt: number) => {
   // Une seule entree d'attaque : la simulation distingue elle-meme le clic
   // bref (coup normal) du maintien (coup lourd).
   cmd.attaqueMaintenue = entrees.attaqueMaintenue
-  if (entrees.veutRuer()) cmd.ruee = true
+  // Clic droit : ruee a l'epee, tourbillon a la hache.
+  if (entrees.veutSpeciale()) cmd.speciale = true
+  cmd.specialeMaintenue = entrees.specialeMaintenue
 
   appliquerTouchesDebug()
 
@@ -81,14 +83,15 @@ app.on('update', (dt: number) => {
 
 /**
  * Touches de debug du prototype.
- * L'epee ne se ramasse nulle part : il n'y a ni barils ni coffres sur une map
- * vide (§2). En attendant, on la donne a la main pour pouvoir tester le combat,
- * qui est le chemin critique (§9).
+ * Les armes ne se ramassent nulle part : il n'y a ni barils ni coffres sur une
+ * map vide (§2). En attendant, on les donne a la main pour pouvoir tester le
+ * combat, qui est le chemin critique (§9).
  */
 function appliquerTouchesDebug(): void {
   for (const touche of entrees.consommerFronts()) {
     if (touche === pc.KEY_1) moi.arme = 'poings'
     else if (touche === pc.KEY_2) moi.arme = 'epee'
+    else if (touche === pc.KEY_3) moi.arme = 'hache'
     else if (touche === pc.KEY_K) monde.forcerMort(moi.id)
   }
 }

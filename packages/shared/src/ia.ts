@@ -54,17 +54,16 @@ export function majIA(temps: number, e: Entite, candidats: Iterable<Entite>): vo
   entree.saut = false
   entree.esquive = 0
 
-  // Frappe a charge pleine : le mannequin joue correctement la courbe de degats.
-  // Le delai de reaction n'est pas une facilite : sans lui un mannequin sort
-  // un DPS parfait et tue un joueur nu en 4 s, ce qui transforme le bac a sable
-  // en course a la survie et empeche justement de juger le combat.
+  // Frappe des que son coup precedent est termine, apres un delai de reaction.
+  // Ce delai n'est pas une facilite : sans lui un mannequin sort un DPS parfait
+  // et tue un joueur nu en 4 s, ce qui transforme le bac a sable en course a la
+  // survie et empeche justement de juger le combat.
   // Le mannequin ne fait que des clics brefs : un tick d'appui, donc un coup
   // normal. Pas de coup lourd — ce serait un partenaire d'entrainement trop dur.
-  const charge = (temps - e.dernierCoupA) / arme.recharge
-  const pret = charge >= 1 && temps >= ia.prochaineAttaque
+  const pret = temps >= e.finSwing && temps >= ia.prochaineAttaque
   entree.attaqueMaintenue = !entree.attaqueMaintenue && pret && d <= arme.portee * 0.95
   if (entree.attaqueMaintenue) {
-    ia.prochaineAttaque = temps + arme.recharge + DELAI_REACTION_MIN + Math.random() * DELAI_REACTION_VARIATION
+    ia.prochaineAttaque = temps + arme.dureeSwing + DELAI_REACTION_MIN + Math.random() * DELAI_REACTION_VARIATION
   }
 }
 

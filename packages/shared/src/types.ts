@@ -4,13 +4,13 @@ export type EntityId = number
 
 export type Espece = 'joueur' | 'mannequin'
 
-export type ArmeId = 'poings' | 'epee'
+export type ArmeId = 'poings' | 'epee' | 'hache'
 
 export type EtatPlongeon = 'aucun' | 'suspension' | 'chute'
 
 export type EtatRuee = 'aucun' | 'course'
 
-export type TypeAttaque = 'aucun' | 'normal' | 'lourd'
+export type TypeAttaque = 'aucun' | 'normal' | 'lourd' | 'tour'
 
 /**
  * Entree d'un acteur pour un tick.
@@ -35,8 +35,13 @@ export interface Entree {
    * Clic bref = coup normal, maintien = coup lourd. La sim tranche elle-meme.
    */
   attaqueMaintenue: boolean
-  /** Front montant : consomme puis remis a false par la sim. */
-  ruee: boolean
+  /**
+   * Front montant du clic droit, consomme par la sim : l'action speciale de
+   * l'arme. Ruee a l'epee, tourbillon a la hache, rien aux poings.
+   */
+  speciale: boolean
+  /** Etat continu du clic droit : maintenu, le tourbillon enchaine ses tours. */
+  specialeMaintenue: boolean
 }
 
 export function entreeVide(): Entree {
@@ -49,7 +54,8 @@ export function entreeVide(): Entree {
     saut: false,
     esquive: 0,
     attaqueMaintenue: false,
-    ruee: false,
+    speciale: false,
+    specialeMaintenue: false,
   }
 }
 
@@ -72,7 +78,7 @@ export interface Entite {
   /** Vitesse bridee a MULT_RALENTI jusqu'a cette date. Annule par une esquive. */
   ralentiJusqua: number
   /** Fenetre pendant laquelle le plafond de vitesse ne s'applique pas, pour
-   *  qu'une poussee de coup lourd ne soit pas rabotee des le premier tick. */
+   *  qu'une projection de coup lourd ne soit pas rabotee en plein vol. */
   finPoussee: number
 
   // Etourdissement : ni deplacement ni attaque. Une esquive en sort, mais pas
@@ -88,16 +94,36 @@ export interface Entite {
   dernierPlongeonA: number
   /** Apres l'impact : plus aucun controle jusqu'a cette date. */
   finRecuperation: number
+  /** Pas de saut avant cette date : pendant le coup lourd qui conclut une ruee. */
+  sautInterditJusqua: number
 
   /** Date a laquelle le bouton d'attaque a ete enfonce, ou -99. */
   maintienDepuis: number
-  /** Evite qu'un relachement apres un coup lourd declenche aussi un coup normal. */
+  /** Le maintien en cours a deja donne son coup lourd : il n'en donnera pas
+   *  d'autre, et son relachement ne declenchera pas de coup normal. */
   lourdPendantCeMaintien: boolean
   dernierLourdA: number
 
   // Attaque en vol : lancee, pas encore resolue. Annulee si on encaisse.
   attaqueEnCours: TypeAttaque
   attaqueImpactA: number
+  /** Date de la derniere annulation. Sert au rendu : un coup annule ne doit
+   *  jamais jouer sa frappe. */
+  attaqueAnnuleeA: number
+
+  // Enchainement de coups normaux (longue hache)
+  /** Rang du dernier coup normal dans l'enchainement (0, 1, 2) ; -1 apres tout
+   *  autre coup, ou quand on encaisse. */
+  comboEtape: number
+  /** Clic recu pendant un coup de l'enchainement : le suivant part a sa fin. */
+  coupEnAttente: boolean
+
+  // Tourbillon (clic droit de la longue hache)
+  /** Rang du tour en cours, de 1 a TOUR_MAX ; 0 hors tourbillon. */
+  tourbillon: number
+  /** Un clic pendant ce tour a demande le suivant. */
+  tourDemande: boolean
+  dernierTourA: number
 
   // Ruee
   ruee: EtatRuee
@@ -122,8 +148,9 @@ export interface Entite {
 
   // Horodatages de combat (en temps de simulation, secondes)
   dernierCoupA: number
+  /** Fin de l'animation d'attaque en cours : aucun nouveau coup avant. La jauge
+   *  sous le reticule se remplit de `dernierCoupA` jusqu'a cette date. */
   finSwing: number
-  chargeDernierCoup: number
   invulnJusqua: number
   dernierDegatSubiA: number
   tempsReapparition: number
@@ -146,11 +173,11 @@ export interface EtatIA {
 }
 
 export type Evenement =
-  | { type: 'coup'; attaquant: EntityId; cible: EntityId; degats: number; critique: boolean; charge: number; pos: Vec3 }
-  | { type: 'coup_vide'; attaquant: EntityId; charge: number }
+  | { type: 'coup'; attaquant: EntityId; cible: EntityId; degats: number; pos: Vec3 }
+  | { type: 'coup_vide'; attaquant: EntityId }
   | { type: 'esquive'; entite: EntityId; direction: number }
   | { type: 'coup_lourd'; attaquant: EntityId; cible: EntityId | null }
-  | { type: 'attaque_lancee'; entite: EntityId; lourd: boolean }
+  | { type: 'attaque_lancee'; entite: EntityId; attaque: 'normal' | 'lourd' | 'tour' }
   | { type: 'attaque_annulee'; entite: EntityId }
   | { type: 'ruee'; entite: EntityId }
   | { type: 'ruee_impact'; entite: EntityId; cible: EntityId | null; pos: Vec3 }

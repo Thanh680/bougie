@@ -6,7 +6,7 @@ import {
   HAUTEUR_ENTITE,
   STUN_DELAI_AVANT_ESQUIVE,
   VITESSE_COURSE,
-  chargeDe,
+  jaugeCoup,
   palierDe,
   prochainPalier,
   xpPourNiveau,
@@ -23,7 +23,7 @@ const GABARIT = `
   <div class="reticule" data-reticule>
     <span class="croix"></span>
     <span class="marqueur" data-marqueur></span>
-    <div class="jauge-charge"><i data-charge></i></div>
+    <div class="jauge-coup"><i data-coup></i></div>
     <div class="vitesse"><b data-vitesse>0.0</b> m/s <span data-pic></span></div>
     <div class="arme-lourd" data-arme-lourd hidden>ATTAQUE ANNULEE</div>
     <div class="etourdi" data-etourdi hidden>
@@ -64,13 +64,15 @@ const GABARIT = `
     <ul>
       <li><b>ZQSD / WASD</b> se deplacer &nbsp; <b>Espace</b> sauter</li>
       <li><b>D + Espace</b> / <b>Q + Espace</b> (sans avancer ni reculer) esquiver — deplacement pur, pas d'invulnerabilite</li>
-      <li><b>Clic bref</b> = coup normal. <b>Clic maintenu</b> = coup lourd, qui repousse et etourdit mais immobilise.</li>
+      <li><b>Clic bref</b> = coup normal. <b>Clic maintenu</b> = un coup lourd, lent, qui projette et etourdit mais ralentit.</li>
       <li>Aucune attaque n'est instantanee : <b>encaisser un coup annule la votre</b>.</li>
-      <li><b>Clic droit</b> = ruee en ligne droite. Sur un ennemi : degats, etourdissement, puis coup lourd enchaine.</li>
-      <li><b>Clic gauche en l'air, a l'epee</b> = plongeon : on se fige, on tombe a la verticale, on etourdit devant</li>
-      <li>Frapper <b>aux poings en retombant</b> = coup critique</li>
+      <li><b>Clic droit</b> : a l'epee, ruee en ligne droite, toujours conclue par un coup lourd. A la hache, <b>tourbillon</b> : un tour par clic ou tant qu'on maintient, 3 d'affilee max, le dernier repousse.</li>
+      <li><b>Longue hache</b> : recliquer pendant un coup enchaine le suivant, jusqu'a 3 ; le 3e projette.</li>
+      <li><b>Clic gauche en l'air, a l'epee ou a la hache</b> = plongeon : on se fige, on tombe a la verticale, on etourdit devant</li>
+      <li>Pendant un coup lourd ou un tourbillon on peut <b>bouger et sauter, ralenti</b> (Espace saute, meme avec Q ou D) — sauf apres une ruee : pas de saut</li>
+      <li>La jauge sous le viseur se remplit pendant le coup : <b>doree = on peut refrapper</b></li>
       <li>Attaquer ralentit ; encaisser aussi. <b>Une esquive annule le ralentissement et l'etourdissement.</b></li>
-      <li><b>1</b> poings &nbsp; <b>2</b> epee (debug) &nbsp; <b>K</b> se suicider &nbsp; <b>Echap</b> liberer la souris</li>
+      <li><b>1</b> poings &nbsp; <b>2</b> epee &nbsp; <b>3</b> longue hache (debug) &nbsp; <b>K</b> se suicider &nbsp; <b>Echap</b> liberer la souris</li>
     </ul>
   </div>
 `
@@ -97,13 +99,14 @@ export class Hud {
   private annulation = 0
   private vignette = 0
   private marqueur = 0
-  private marqueurCrit = false
+  /** Marqueur dore : un plongeon qui a touche. */
+  private marqueurFort = false
   private fps = 60
   private horloge = 0
 
   constructor(racine: HTMLElement) {
     racine.innerHTML = GABARIT
-    for (const noeud of racine.querySelectorAll<HTMLElement>('[data-vignette],[data-plaques],[data-reticule],[data-marqueur],[data-charge],[data-feed],[data-serie],[data-palier],[data-pv],[data-pv-txt],[data-xp],[data-niveau],[data-arme],[data-esquive],[data-lourd],[data-ruee],[data-vitesse],[data-pic],[data-arme-lourd],[data-etourdi],[data-sortie],[data-stats],[data-mort],[data-compte],[data-pause]')) {
+    for (const noeud of racine.querySelectorAll<HTMLElement>('[data-vignette],[data-plaques],[data-reticule],[data-marqueur],[data-coup],[data-feed],[data-serie],[data-palier],[data-pv],[data-pv-txt],[data-xp],[data-niveau],[data-arme],[data-esquive],[data-lourd],[data-ruee],[data-vitesse],[data-pic],[data-arme-lourd],[data-etourdi],[data-sortie],[data-stats],[data-mort],[data-compte],[data-pause]')) {
       const cle = noeud.getAttributeNames().find((n) => n.startsWith('data-'))
       if (cle) this.el[cle.slice(5)] = noeud
     }
@@ -118,7 +121,7 @@ export class Hud {
         case 'coup':
           if (ev.attaquant === idLocal) {
             this.marqueur = 1
-            this.marqueurCrit = ev.critique
+            this.marqueurFort = false
           }
           if (ev.cible === idLocal) {
             this.vignette = 1
@@ -135,6 +138,10 @@ export class Hud {
           )
           break
         }
+        case 'plongeon_impact':
+          // Arrive apres les 'coup' du meme impact : c'est lui qui passe le marqueur en dore.
+          if (ev.entite === idLocal && ev.touches.length > 0) this.marqueurFort = true
+          break
         case 'attaque_annulee':
           if (ev.entite === idLocal) this.annulation = 1
           break
@@ -158,14 +165,14 @@ export class Hud {
     this.fps += ((dt > 0 ? 1 / dt : 60) - this.fps) * 0.08
 
     const arme = ARMES[moi.arme]
-    const charge = chargeDe(moi, monde.temps)
 
-    // Reticule et jauge de charge — le retour le plus important du systeme :
-    // c'est lui qui apprend au joueur a ne pas spammer.
-    const jauge = this.el['charge']
+    // Jauge sous le reticule : elle se remplit pendant l'animation du coup en
+    // cours et passe en dore a sa fin, quand on peut refrapper.
+    const jauge = this.el['coup']
     if (jauge) {
-      jauge.style.width = `${charge * 100}%`
-      jauge.classList.toggle('pleine', charge >= 0.999)
+      const j = jaugeCoup(moi, monde.temps)
+      jauge.style.width = `${j * 100}%`
+      jauge.classList.toggle('pleine', j >= 0.999)
     }
 
     this.majVitesse(monde, moi, dt)
@@ -175,7 +182,7 @@ export class Hud {
     const marqueur = this.el['marqueur']
     if (marqueur) {
       marqueur.style.opacity = String(this.marqueur)
-      marqueur.classList.toggle('crit', this.marqueurCrit)
+      marqueur.classList.toggle('fort', this.marqueurFort)
     }
 
     this.vignette = Math.max(0, this.vignette - dt * 2.2)

@@ -29,7 +29,7 @@ export function pvMaxPourNiveau(niveau: number): number {
 
 /** Valeur d'une arme portee, en XP. C'est ici que passera le butin (§2). */
 export function valeurEquipement(entite: Entite): number {
-  return entite.arme === 'epee' ? 25 : 0
+  return entite.arme === 'poings' ? 0 : 25
 }
 
 /**
