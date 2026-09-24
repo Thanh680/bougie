@@ -4,8 +4,10 @@ import {
   COUT_ESQUIVE,
   DELAI_REAPPARITION,
   HAUTEUR_ENTITE,
+  STAMINA_MAX,
   STUN_DELAI_AVANT_ESQUIVE,
   VITESSE_COURSE,
+  chargeEnCours,
   jaugeCoup,
   palierDe,
   prochainPalier,
@@ -19,6 +21,7 @@ import {
 const GABARIT = `
   <div class="vignette" data-vignette></div>
   <div class="plaques" data-plaques></div>
+  <div class="chiffres" data-chiffres></div>
 
   <div class="reticule" data-reticule>
     <span class="croix"></span>
@@ -26,6 +29,7 @@ const GABARIT = `
     <div class="jauge-coup"><i data-coup></i></div>
     <div class="vitesse"><b data-vitesse>0.0</b> m/s <span data-pic></span></div>
     <div class="arme-lourd" data-arme-lourd hidden>ATTAQUE ANNULEE</div>
+    <div class="coup-dos" data-coup-dos hidden>DANS LE DOS</div>
     <div class="etourdi" data-etourdi hidden>
       <b>ETOURDI</b>
       <span data-sortie></span>
@@ -41,13 +45,12 @@ const GABARIT = `
       <span class="palier" data-palier></span>
     </div>
     <div class="barre pv"><i data-pv></i><span data-pv-txt></span></div>
+    <div class="barre stamina" data-stamina><i data-stamina-niveau></i></div>
     <div class="barre xp"><i data-xp></i></div>
     <div class="ligne-infos">
       <span data-niveau>Niveau 1</span>
       <span class="sep">/</span>
       <span data-arme>Poings</span>
-      <span class="sep">/</span>
-      <span class="esquive">esquive <b class="jauge-esquive"><i data-esquive></i></b></span>
     </div>
   </div>
 
@@ -63,16 +66,18 @@ const GABARIT = `
     <h1>Cliquez pour jouer</h1>
     <ul>
       <li><b>ZQSD / WASD</b> se deplacer &nbsp; <b>Espace</b> sauter</li>
-      <li><b>D + Espace</b> / <b>Q + Espace</b> (sans avancer ni reculer) esquiver — deplacement pur, pas d'invulnerabilite</li>
+      <li><b>D + Espace</b> / <b>Q + Espace</b> (sans avancer ni reculer) esquiver — deplacement pur, pas d'invulnerabilite. <b>Coute la moitie de la stamina</b>, qui se regenere.</li>
       <li><b>Clic bref</b> = coup normal. <b>Clic maintenu</b> = un coup lourd, lent, qui projette et etourdit mais ralentit.</li>
       <li>Aucune attaque n'est instantanee : <b>encaisser un coup annule la votre</b>.</li>
       <li><b>Clic droit</b> : a l'epee, ruee en ligne droite, toujours conclue par un coup lourd. A la hache, <b>tourbillon</b> : un tour par clic ou tant qu'on maintient, 3 d'affilee max, le dernier repousse.</li>
-      <li><b>Longue hache</b> : recliquer pendant un coup enchaine le suivant, jusqu'a 3 ; le 3e projette.</li>
-      <li><b>Clic gauche en l'air, a l'epee ou a la hache</b> = plongeon : on se fige, on tombe a la verticale, on etourdit devant</li>
+      <li><b>Longue hache</b> : chaque coup avance d'un pas ; recliquer pendant un coup enchaine le suivant, jusqu'a 3 ; le 3e projette.</li>
+      <li><b>Double epee</b> : 3 gestes (le 3e fait trebucher) ; coup lourd qui frappe deux fois <b>dans le dos</b> ; clic droit = <b>uppercut</b> qui vous fait decoller avec la cible, clic en l'air = <b>fauchage</b> qui projette, puis chute sans controle. Les deux coutent de la stamina.</li>
+      <li><b>Marteau</b> : coup a l'appui, balayage lent a 270 deg qui projette, sans bouger ; <b>clic droit maintenu</b> = charge (stamina), relacher ecrase le sol devant ; clic en l'air = frappe sautee, une par saut.</li>
+      <li><b>Clic gauche en l'air</b> = plongeon : a l'epee, on se fige, on tombe a la verticale et on etourdit devant ; a la hache, on fond 4 m en avant et on etourdit tout autour</li>
       <li>Pendant un coup lourd ou un tourbillon on peut <b>bouger et sauter, ralenti</b> (Espace saute, meme avec Q ou D) — sauf apres une ruee : pas de saut</li>
-      <li>La jauge sous le viseur se remplit pendant le coup : <b>doree = on peut refrapper</b></li>
+      <li>La jauge sous le viseur se remplit pendant le coup : <b>doree = on peut refrapper</b>. Orange : la charge du marteau.</li>
       <li>Attaquer ralentit ; encaisser aussi. <b>Une esquive annule le ralentissement et l'etourdissement.</b></li>
-      <li><b>1</b> poings &nbsp; <b>2</b> epee &nbsp; <b>3</b> longue hache (debug) &nbsp; <b>K</b> se suicider &nbsp; <b>Echap</b> liberer la souris</li>
+      <li><b>1</b> poings &nbsp; <b>2</b> epee &nbsp; <b>3</b> longue hache &nbsp; <b>4</b> double epee &nbsp; <b>5</b> marteau (debug) &nbsp; <b>K</b> se suicider &nbsp; <b>Echap</b> liberer la souris</li>
     </ul>
   </div>
 `
@@ -83,9 +88,22 @@ interface LigneFeed {
   expire: number
 }
 
+/** Degats qui montent au-dessus du mannequin de test, puis s'effacent. */
+interface Chiffre {
+  el: HTMLElement
+  x: number
+  y: number
+  z: number
+  debut: number
+}
+
+const DUREE_CHIFFRE = 0.9
+
 export class Hud {
   private readonly el: Record<string, HTMLElement> = {}
   private readonly plaques = new Map<EntityId, HTMLElement>()
+  private chiffres: Chiffre[] = []
+  private cotePrecedent = 1
 
   private feed: LigneFeed[] = []
   // Mesure de vitesse : on la calcule sur les DEPLACEMENTS reels, pas sur le
@@ -97,6 +115,10 @@ export class Hud {
   private pic = 0
   private picExpire = 0
   private annulation = 0
+  /** « Dans le dos » : le coup fort de la double epee vient de frapper deux fois. */
+  private coupDos = 0
+  /** La barre de stamina clignote : un coup ou une esquive n'est pas parti, faute de stamina. */
+  private manqueStamina = 0
   private vignette = 0
   private marqueur = 0
   /** Marqueur dore : un plongeon qui a touche. */
@@ -106,7 +128,7 @@ export class Hud {
 
   constructor(racine: HTMLElement) {
     racine.innerHTML = GABARIT
-    for (const noeud of racine.querySelectorAll<HTMLElement>('[data-vignette],[data-plaques],[data-reticule],[data-marqueur],[data-coup],[data-feed],[data-serie],[data-palier],[data-pv],[data-pv-txt],[data-xp],[data-niveau],[data-arme],[data-esquive],[data-lourd],[data-ruee],[data-vitesse],[data-pic],[data-arme-lourd],[data-etourdi],[data-sortie],[data-stats],[data-mort],[data-compte],[data-pause]')) {
+    for (const noeud of racine.querySelectorAll<HTMLElement>('[data-vignette],[data-plaques],[data-chiffres],[data-reticule],[data-marqueur],[data-coup],[data-feed],[data-serie],[data-palier],[data-pv],[data-pv-txt],[data-stamina],[data-stamina-niveau],[data-xp],[data-niveau],[data-arme],[data-lourd],[data-ruee],[data-vitesse],[data-pic],[data-arme-lourd],[data-coup-dos],[data-etourdi],[data-sortie],[data-stats],[data-mort],[data-compte],[data-pause]')) {
       const cle = noeud.getAttributeNames().find((n) => n.startsWith('data-'))
       if (cle) this.el[cle.slice(5)] = noeud
     }
@@ -127,6 +149,7 @@ export class Hud {
             this.vignette = 1
             camera.encaisse()
           }
+          if (monde.entites.get(ev.cible)?.mesure) this.pousserChiffre(ev.degats, ev.pos.x, ev.pos.y, ev.pos.z)
           break
         case 'mort': {
           const tueur = nom(ev.tueur)
@@ -144,6 +167,12 @@ export class Hud {
           break
         case 'attaque_annulee':
           if (ev.entite === idLocal) this.annulation = 1
+          break
+        case 'coup_dos':
+          if (ev.attaquant === idLocal) this.coupDos = 1
+          break
+        case 'stamina_insuffisante':
+          if (ev.entite === idLocal) this.manqueStamina = 1
           break
         case 'palier':
           this.pousserFeed(
@@ -167,12 +196,16 @@ export class Hud {
     const arme = ARMES[moi.arme]
 
     // Jauge sous le reticule : elle se remplit pendant l'animation du coup en
-    // cours et passe en dore a sa fin, quand on peut refrapper.
+    // cours et passe en dore a sa fin, quand on peut refrapper. Pendant la
+    // charge du marteau, elle montre la charge, en orange.
     const jauge = this.el['coup']
     if (jauge) {
-      const j = jaugeCoup(moi, monde.temps)
+      const charge = chargeEnCours(moi, monde.temps)
+      const j = charge ?? jaugeCoup(moi, monde.temps)
       jauge.style.width = `${j * 100}%`
-      jauge.classList.toggle('pleine', j >= 0.999)
+      jauge.classList.toggle('pleine', charge === null && j >= 0.999)
+      jauge.classList.toggle('charge', charge !== null)
+      jauge.classList.toggle('chargee', charge !== null && charge >= 1)
     }
 
     this.majVitesse(monde, moi, dt)
@@ -206,11 +239,15 @@ export class Hud {
     const elArme = this.el['arme']
     if (elArme) elArme.textContent = arme.nom
 
-    const esquive = this.el['esquive']
-    if (esquive) {
-      esquive.style.width = `${moi.jaugeEsquive * 100}%`
-      // Une seule information compte : reste-t-il au moins une esquive ?
-      esquive.classList.toggle('pleine', moi.jaugeEsquive >= COUT_ESQUIVE)
+    // Stamina : ce qui compte d'un coup d'oeil, c'est s'il reste une esquive.
+    // Elle clignote quand un coup ou une esquive n'est pas parti faute d'en avoir.
+    this.manqueStamina = Math.max(0, this.manqueStamina - dt * 2.5)
+    const stamina = this.el['stamina']
+    const niveauStamina = this.el['stamina-niveau']
+    if (stamina && niveauStamina) {
+      niveauStamina.style.width = `${(moi.stamina / STAMINA_MAX) * 100}%`
+      stamina.classList.toggle('esquive', moi.stamina >= COUT_ESQUIVE)
+      stamina.classList.toggle('manque', this.manqueStamina > 0)
     }
 
     // Annulation : c'est la nouvelle sanction d'un coup encaisse, et sans un
@@ -218,6 +255,11 @@ export class Hud {
     this.annulation = Math.max(0, this.annulation - dt * 1.6)
     const annule = this.el['arme-lourd']
     if (annule) annule.hidden = this.annulation <= 0
+
+    // Coup fort dans le dos : sans le dire, le second coup passe pour un hasard.
+    this.coupDos = Math.max(0, this.coupDos - dt * 1.4)
+    const dos = this.el['coup-dos']
+    if (dos) dos.hidden = this.coupDos <= 0
 
     // Serie et palier
     const serie = this.el['serie']
@@ -257,6 +299,7 @@ export class Hud {
 
     this.majFeed()
     this.majPlaques(monde, moi, camera, canvas)
+    this.majChiffres(camera, canvas)
   }
 
   afficherPause(visible: boolean): void {
@@ -324,9 +367,8 @@ export class Hud {
       sortie.textContent = `${avantSortie.toFixed(1)} s`
       sortie.classList.remove('pret')
     } else {
-      sortie.textContent =
-        moi.jaugeEsquive >= COUT_ESQUIVE ? 'Q ou D + Espace pour sortir' : 'jauge d’esquive vide'
-      sortie.classList.toggle('pret', moi.jaugeEsquive >= COUT_ESQUIVE)
+      sortie.textContent = moi.stamina >= COUT_ESQUIVE ? 'Q ou D + Espace pour sortir' : 'pas assez de stamina'
+      sortie.classList.toggle('pret', moi.stamina >= COUT_ESQUIVE)
     }
   }
 
@@ -365,7 +407,7 @@ export class Hud {
       if (!plaque) {
         plaque = document.createElement('div')
         plaque.className = 'plaque'
-        plaque.innerHTML = '<span class="nom"></span><span class="pvb"><i></i></span>'
+        plaque.innerHTML = '<span class="mesure"></span><span class="nom"></span><span class="pvb"><i></i></span>'
         conteneur.appendChild(plaque)
         this.plaques.set(e.id, plaque)
       }
@@ -391,13 +433,68 @@ export class Hud {
       plaque.style.transform = `translate(-50%, -100%) translate(${ecran.x * echelle}px, ${ecran.y * echelle}px)`
       plaque.style.opacity = String(Math.max(0.25, 1 - distance / 60))
 
-      const nom = plaque.firstElementChild as HTMLElement
+      const nom = plaque.querySelector<HTMLElement>('.nom')!
       const p = palierDe(e.serie)
       nom.textContent = p ? `${e.nom} — ${p.nom}` : e.nom
       nom.className = `nom rang-${p?.rang ?? 0}`
 
-      const barre = plaque.lastElementChild?.firstElementChild as HTMLElement
+      const barre = plaque.querySelector<HTMLElement>('.pvb i')!
       barre.style.width = `${Math.max(0, (e.pv / e.pvMax) * 100)}%`
+
+      // Mannequin de test : le total encaisse depuis le premier coup, et le
+      // temps qu'il aurait fallu pour tuer un joueur niveau 1.
+      const mesure = plaque.querySelector<HTMLElement>('.mesure')!
+      const m = e.mesure
+      let texte = ''
+      if (m && m.coups > 0) {
+        texte =
+          `<b>${Math.round(m.degats)}</b> degats<br>` +
+          `${m.coups} coup${m.coups > 1 ? 's' : ''} en ${(m.dernierCoupA - m.premierCoupA).toFixed(2)} s`
+        if (m.koA >= 0) texte += `<br><span class="ko">${e.pvMax} PV en ${(m.koA - m.premierCoupA).toFixed(2)} s</span>`
+      }
+      if (mesure.innerHTML !== texte) mesure.innerHTML = texte
     }
+  }
+
+  private pousserChiffre(degats: number, x: number, y: number, z: number): void {
+    const conteneur = this.el['chiffres']
+    if (!conteneur) return
+    const el = document.createElement('div')
+    el.className = 'chiffre'
+    el.textContent = String(Math.round(degats))
+    conteneur.appendChild(el)
+    // Partent de la poitrine, un cote puis l'autre : les deux coups d'un meme
+    // geste ne se superposent pas, et aucun ne monte jusqu'a la plaque.
+    this.cotePrecedent = -this.cotePrecedent
+    const decalage = this.cotePrecedent * 0.35 + (Math.random() - 0.5) * 0.15
+    this.chiffres.push({ el, x: x + decalage, y: y + HAUTEUR_ENTITE * 0.65, z, debut: this.horloge })
+  }
+
+  /** Les chiffres montent sous la plaque et s'effacent. */
+  private majChiffres(camera: pc.Entity, canvas: HTMLCanvasElement): void {
+    const composant = camera.camera
+    if (!composant) return
+    const echelle = canvas.clientWidth > 0 ? canvas.clientWidth / canvas.width : 1
+    const posCam = camera.getPosition()
+    const avant = camera.forward
+    const monde3 = new pc.Vec3()
+    const ecran = new pc.Vec3()
+
+    this.chiffres = this.chiffres.filter((c) => {
+      const age = (this.horloge - c.debut) / DUREE_CHIFFRE
+      if (age >= 1) {
+        c.el.remove()
+        return false
+      }
+      monde3.set(c.x, c.y + age * 0.75, c.z)
+      const devant =
+        (monde3.x - posCam.x) * avant.x + (monde3.y - posCam.y) * avant.y + (monde3.z - posCam.z) * avant.z
+      c.el.style.display = devant > 0.5 ? '' : 'none'
+      composant.worldToScreen(monde3, ecran)
+      c.el.style.transform =
+        `translate(-50%, -50%) translate(${ecran.x * echelle}px, ${ecran.y * echelle}px) scale(${1.3 - 0.3 * age})`
+      c.el.style.opacity = String(1 - age * age)
+      return true
+    })
   }
 }

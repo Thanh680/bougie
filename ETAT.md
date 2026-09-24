@@ -4,7 +4,7 @@ Ce fichier dit **où on en est**. `CLAUDE.md` dit ce qu'on veut faire (le design
 verrouillé). `README.md` dit comment le code marche. Celui-ci dit ce qui est
 construit, ce qui a été décidé en cours de route, et ce qui reste ouvert.
 
-**Dernière mise à jour : 23 septembre 2026.**
+**Dernière mise à jour : 24 septembre 2026.**
 
 ---
 
@@ -49,7 +49,8 @@ npm install && npm run dev     # http://localhost:5173
 | Caméra 3ᵉ personne façon Marvel Rivals | fait |
 | HUD : PV, XP, série, vitesse, étourdissement, kill feed, plaques | fait |
 | Jauge sous le réticule calée sur la fin de l'animation du coup | fait |
-| Longue hache : enchaînement de 3 coups, uppercut, plongeon, tourbillon | fait |
+| Longue hache : 3 gestes à double coup avec petite ruée, uppercut en cône, plongeon en avant à onde circulaire, tourbillon | fait |
+| Mannequin de test au centre de la carte : chiffres des coups, total, temps pour tuer | fait |
 | Réseau, butin, prime, sas, modèles, animations, sons | **rien** |
 
 Valeurs mesurées : TTK épée 2,5 s (cible §8 : 2–4 s), course 8,13 m/s,
@@ -87,8 +88,14 @@ initial. **Toutes viennent de l'utilisateur sauf mention contraire.**
 | Plus de coup critique en retombant aux poings | Jamais demandé, retiré. Le marqueur doré reste pour un plongeon qui touche |
 | Pendant un coup lourd, Espace + Q/D saute | L'esquive y étant interdite, la touche ne faisait rien : impossible de sauter en strafant. Pendant un coup normal, c'est toujours l'esquive |
 | Ruée à l'épée seulement | Aux poings, le clic droit ne fait rien |
-| **Que des armes de corps à corps : pas d'arc** | Pas de frustration pour qui ne veut jouer qu'au contact. Remplace « épée et arc » de `CLAUDE.md` §2 et rend sans objet les questions sur l'arc (§3, §5) |
-| Longue hache façon Counter Sword de S4 : enchaînement de 3 coups au clic (un clic pendant un coup est gardé pour le suivant), uppercut au maintien, plongeon en l'air | Le 3ᵉ coup projette un peu (2,8 m). TTK 2,13 s sur 100 PV en recollant |
+| **Que des armes de corps à corps : pas d'arc** | Pas de frustration pour qui ne veut jouer qu'au contact. `CLAUDE.md` mis à jour le 24 septembre (§2, §3, §5, §7) |
+| Longue hache façon Counter Sword de S4 : enchaînement de 3 gestes au clic (un clic pendant un geste est gardé pour le suivant), uppercut au maintien, plongeon en l'air | Le 3ᵉ geste projette un peu (2,8 m). TTK 2,28 s sur 100 PV en recollant |
+| Double coup par geste : combo de la hache et tours du tourbillon | 12+12 / 12+12 / 15+15 et 6+6 par tour. Le second coup passe l'invulnérabilité donnée par le premier et n'en redonne pas |
+| Uppercut de la hache en cône | Projette chaque cible à 4,4 m et 60° de part et d'autre ; l'épée n'en projette qu'une |
+| Plongeon de la hache en avant, façon Counter Sword | Suspension de 0,1 s (où l'on vise), puis 4 m en 0,18 s quelle que soit la hauteur : 0,30 s en l'air après le clic. Celui de l'épée reste vertical |
+| Impact du plongeon de la hache tout autour | Onde à 360° dans 3,6 m ; l'épée ne frappe que devant |
+| Petite ruée à chaque coup normal de la hache, comme en S4 League | 1 m pendant l'armement, arrêt net. S'arrête à 1,3 m d'une cible *(moi, pour ne pas la bousculer)*, et quand on encaisse ou qu'on esquive. L'épée n'en a pas |
+| Mannequin de test, compteur remis à zéro quand on arrête de le frapper | Au centre de la carte (JSON, champ `essais`), 3 s sans coup. Retour à son poste à la remise à zéro *(moi)* : sinon une projection l'envoie à 6 m à chaque essai |
 | Clic droit de la hache = tourbillon de la batte, sans timing : un tour par clic ou tant qu'on maintient, 3 d'affilée max, le dernier repousse | Remplace la garde de la Counter Sword |
 | Tourbillon ralenti, comme toute attaque | Sinon il devient une sortie d'encerclement, qui protège le porteur d'aura (§9) |
 | Pas d'esquive pendant le tourbillon (Espace + Q/D saute) | *(moi)* Même raison que pour le coup lourd : elle laverait le ralentissement |
@@ -119,10 +126,12 @@ initial. **Toutes viennent de l'utilisateur sauf mention contraire.**
    frappent plus tôt une cible ruée) ou revenir à la normale ?
 7. **Rôle du PvE** — toujours ouvert (§3). Les mannequins sont des partenaires
    d'entraînement, pas un choix de design.
-8. **Chiffres de la longue hache** — posés au jugé : 24/24/30 dégâts, 0,7 s par
-   coup, tourbillon 12 dégâts par tour à 3,2 m. Dans S4, l'uppercut de la Counter
-   Sword touche tout un cône ; ici une seule cible, comme le coup lourd de l'épée.
-   À régler en jouant.
+8. **Chiffres de la longue hache** — posés au jugé : 24/24/30 dégâts par geste,
+   0,7 s par geste, tourbillon 12 dégâts par tour à 3,2 m, uppercut en cône à
+   4,4 m. À régler en jouant — le mannequin de test est là pour ça.
+9. **L'uppercut en cône** projette tout un groupe à 6 m : c'est la deuxième arme
+   anti-coalition après le plongeon. Ce qui la tient : son armement de 0,65 s,
+   que n'importe quel coup annule. À vérifier à 8.
 
 *Résolu le 23 septembre :* la sortie par esquive contre le combo de ruée. Avec
 `WINDUP_LOURD` à 0,45 s, elle est possible entre 0,3 et 0,45 s après l'impact
@@ -176,6 +185,13 @@ l'animation.
 - Dès que le coup lourd ne bloque plus le déplacement, **rien** ne l'empêche
   d'être annulé par une ruée : il faut le garde explicite (`enCoupLourd`), sinon
   ruée → coup lourd → ruée file à 18 m/s.
+- Une vitesse imposée pendant une fenêtre (petite ruée) continue après elle et
+  glisse avec la friction : +0,8 m sur un pas d'1 m. Arrêter net à la fin.
+- Un corps sur la trajectoire d'une plongée la raccourcit (séparation des
+  capsules) : pour mesurer une distance, garder le chemin libre.
+- L'invulnérabilité de 0,4 s après un coup empêche tout coup multiple. Le second
+  coup d'un geste doit passer celle que le premier vient de donner **et ne pas en
+  redonner** : sinon elle court jusqu'au tour suivant du tourbillon et le bloque.
 - Deux impacts au même tick se résolvent dans l'ordre des entités, et l'horloge
   à 60 Hz cumulée en flottants peut décaler un impact d'un tick. Pour tester une
   annulation, donner au coup qui doit gagner une avance nette (≥ 2 ticks).

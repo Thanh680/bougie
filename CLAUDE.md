@@ -75,8 +75,8 @@ Trois paliers atteignables en session courte : **3 / 5 / 8 kills.**
 - **TTK court et stable : 2–4 secondes**, identique à tous les paliers. C'est ce qui garantit que trois joueurs battent toujours un joueur.
 
 ### Armes
-- Épée et arc pour commencer.
-- **Arc** : il faut bander avant chaque tir.
+- **Uniquement des armes de corps à corps.** Pas d'arme à distance : pas de frustration pour qui ne veut jouer qu'au contact.
+- Poings, épée et longue hache pour commencer.
 
 ---
 
@@ -92,7 +92,7 @@ Proposition initiale : pierre-papier-ciseaux. Trois objections non résolues :
 
 Deux pistes alternatives qui gardent l'intention :
 - **Attaques et gardes directionnelles** (haut / gauche / droite). Du RPS spatialisé, donc lisible à l'animation, et survit au multi-joueur.
-- **Attaque / parade / esquive avec endurance.** Chaque action coûte et a une fenêtre de récupération. Tolère la latence, marche à N joueurs, s'articule naturellement avec l'arc.
+- **Attaque / parade / esquive avec endurance.** Chaque action coûte et a une fenêtre de récupération. Tolère la latence, marche à N joueurs.
 
 ### Priorité 2 — La visibilité du palier
 Probablement **la variable la plus importante du jeu**, plus que le contenu des paliers.
@@ -105,7 +105,6 @@ Probablement **la variable la plus importante du jeu**, plus que le contenu des 
 Remise à zéro sèche à la mort, ou partielle ? Le sec est brutal mais lisible et garantit le renouvellement. Le partiel adoucit la frustration mais risque de figer le haut du tableau.
 
 ### À trancher ensuite
-- **Arc** : flèches consommables ramassées dans les barils ? Dégradation de la précision après ~1,5 s de tension pour empêcher le camping ? **Quelle réponse l'épée a-t-elle face à l'arc ?** Si les flèches sont des projectiles esquivables avec temps de vol, les deux armes partagent le même langage. Sinon l'archer sort du système de combat.
 - **Bonus de prime du leader** : retenu ou tout-cosmétique ?
 - **Écart nu ↔ pleinement équipé** : ordre de grandeur visé 2,5–3× maximum, pour que trois joueurs coordonnés l'emportent toujours.
 - **Bascule de cycle** : les séries en cours survivent-elles au changement de cycle ?
@@ -179,14 +178,14 @@ Très low poly, compensé par des textures — en basse résolution assumée.
 
 ### Contraintes de lisibilité (imposées par le design)
 - **Animations télégraphiées**, silhouettes distinctes. Le combat repose sur la lecture : distinguer attaque / parade / esquive **avant** l'impact. Des poses lisibles et un peu raides valent mieux que du motion capture élégant.
-- Reconnaître **un archer d'un épéiste en une demi-seconde**, à distance.
+- Reconnaître **l'arme d'un adversaire en une demi-seconde**, à distance.
 - **L'aura doit percer les murs** aux paliers hauts (contour ou colonne de lumière en occlusion). Sinon le leader disparaît derrière un pilier et la coalition ne se forme jamais.
 - **Carte ouverte** : peu de murs pleins, beaucoup d'obstacles bas, différences de hauteur, colonnes. Couverture tactique sans casser la vision à distance.
 
 ### Économie de production
 - **Un seul squelette pour tout ce qui est humanoïde** (joueurs, squelettes, démons). Un rig, des maillages différents dessus. Divise le travail d'animation par ~5. **Décision à prendre avant de modéliser quoi que ce soit** — la refaire après coûte très cher.
-- **Mixamo** pour le socle d'animations (course, idle, mort). Les animations spécifiques (attaques directionnelles, garde, bande d'arc) à la main.
-- Animations minimales : idle, course, 3 attaques directionnelles, garde, esquive, bande d'arc, tir, touché, mort.
+- **Mixamo** pour le socle d'animations (course, idle, mort). Les animations spécifiques (attaques directionnelles, garde) à la main.
+- Animations minimales : idle, course, 3 attaques directionnelles, garde, esquive, touché, mort.
 
 ---
 
@@ -221,7 +220,7 @@ Question unique : **est-ce que le combat est agréable ?**
 **Le vrai test.** Si le système survit, le projet est viable. Sinon, on change de système de combat pendant qu'il coûte encore trois jours.
 
 ### Ensuite seulement
-Arène à 8, paliers visibles, prime partagée, sas, gradient spatial, arc, PvE.
+Arène à 8, paliers visibles, prime partagée, sas, gradient spatial, PvE.
 
 **Question de l'étape 2 :** est-ce que trois joueurs s'allient spontanément contre le porteur d'aura ? Si la coalition n'émerge pas avec 8 joueurs dans une pièce, aucune couche de contenu ne la fera émerger ensuite.
 

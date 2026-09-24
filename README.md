@@ -31,10 +31,10 @@ Puis <http://localhost:5173> et un clic dans la fenêtre pour capturer la souris
 | ZQSD / WASD | se déplacer (relatif caméra) |
 | Espace | sauter |
 | **D + Espace** / **Q + Espace** | esquiver à droite / à gauche, au sol **ou en l'air**. Direction **purement latérale** : en diagonale, Espace saute. Pendant un coup lourd, pas d'esquive : Espace saute. |
-| Clic gauche | frapper. À la hache, recliquer pendant un coup enchaîne le suivant, jusqu'à 3 ; le 3ᵉ projette un peu |
+| Clic gauche | frapper. À la hache, chaque geste avance d'un pas et frappe deux fois, et recliquer pendant un geste enchaîne le suivant, jusqu'à 3 ; le 3ᵉ projette un peu |
 | Clic gauche **maintenu** | coup lourd : projette et étourdit. On peut bouger et sauter pendant, ralenti |
 | **Clic droit** | à l'épée : ruée en ligne droite, toujours conclue par un coup lourd (pendant celui-là, pas de saut). À la hache : **tourbillon**, un tour par clic ou tant qu'on maintient, 3 d'affilée max, le dernier repousse. Aux poings, rien. |
-| Clic gauche **en l'air, à l'épée ou à la hache** | plongeon : suspension, chute verticale, étourdit devant |
+| Clic gauche **en l'air, à l'épée ou à la hache** | plongeon. Épée : suspension, chute verticale, étourdit devant. Hache : brève suspension, plongée de 4 m en avant, étourdit tout autour |
 | Molette souris / déplacement | viser (caméra 3ᵉ personne épaule droite) |
 | `1` / `2` / `3` | poings / épée / longue hache — **debug**, les armes ne se ramassent nulle part |
 | `K` | se suicider — **debug**, pour tester la remise à zéro |
@@ -191,24 +191,54 @@ L'épée en l'air ne frappe donc plus normalement.
 tourbillon de la batte au clic droit à la place de la garde. Le jeu n'aura que des
 armes de corps à corps.
 
-- **Enchaînement** : un clic pendant un coup est gardé, et le coup suivant part dès
-  que celui-ci se termine — jusqu'à trois gestes différents : balayage, revers,
-  taille par-dessus la tête. 24 / 24 / 30 dégâts, 0,7 s par coup, 3,6 m de portée.
-  Le 3ᵉ projette un peu : 2,8 m, apex 0,27 m (mesuré). Un clic jusqu'à 0,25 s après
-  la fin d'un coup enchaîne encore ; au-delà, on repart du premier. Encaisser casse
-  l'enchaînement.
+- **Enchaînement** : un clic pendant un geste est gardé, et le geste suivant part
+  dès que celui-ci se termine — jusqu'à trois gestes différents : balayage, revers,
+  taille par-dessus la tête. Chaque geste **frappe deux fois**, comme la Counter
+  Sword : 12 + 12, 12 + 12, 15 + 15, le second coup 0,15 s après le premier. 0,7 s
+  par geste, 3,6 m de portée. Le dernier coup projette un peu : 2,8 m, apex
+  0,27 m (mesuré). Un clic jusqu'à 0,25 s après la fin d'un geste enchaîne encore ;
+  au-delà, on repart du premier. Encaisser casse l'enchaînement, et annule le
+  second coup s'il n'est pas encore parti.
+- **Petite ruée à chaque geste**, comme en S4 League : le corps accompagne le coup,
+  1 m droit devant pendant l'armement, puis s'arrête net (mesuré : 1,00 / 0,92 /
+  1,00 m). Il s'arrête avant de bousculer une cible (à 1,3 m, cible jamais
+  poussée), et net quand on encaisse ou qu'on esquive. Pas un moyen de
+  transport : en frappant dans le vide en avançant, 40 m en 10 s contre 81 m en
+  courant.
+- **Double coup et invulnérabilité** : les 0,4 s d'invulnérabilité après un coup
+  reçu empêchaient tout coup multiple. Le second coup d'un geste passe donc celle
+  que le premier vient de donner, et n'en donne pas de nouvelle : elle reste calée
+  sur le premier, sinon elle bloquerait aussi le tour suivant du tourbillon.
 - **Coup lourd** : l'uppercut de la Counter Sword. Même projection que l'épée, mais
-  à **4,4 m** : il touche à 4,2 m, là où l'épée rate.
-- **En l'air** : plongeon, comme l'épée.
+  à **4,4 m** et sur **tout le cône** (60° de part et d'autre) : il projette
+  chaque cible du cône, là où l'épée n'en projette qu'une.
+- **En l'air** : plongeon **en avant**, façon Counter Sword. Une suspension brève
+  (0,1 s, le temps de lever la hache et de viser), puis on fond sur le point
+  visé : toujours 4 m en 0,18 s, quelle que soit la hauteur, la descente étant
+  réglée pour toucher le sol pile au bout. Mesuré : 4,07 m, **0,30 s en l'air
+  après le clic** (0,53 s dans la première version). Un corps sur la trajectoire
+  raccourcit la plongée. À l'impact, l'onde frappe **tout autour** dans 3,6 m,
+  derrière comme devant : 26 dégâts, étourdissement, puis 0,5 s de récupération.
+  Pas un moyen de transport : en enchaînant saut et plongeon, 60 m en 10 s contre
+  81 m en courant.
 - **Tourbillon** (clic droit) : un tour à 360° par clic, ou tant qu'on maintient le
-  clic droit, **3 d'affilée maximum**. Chaque tour touche une fois chaque cible à
-  3,2 m, devant comme derrière, à mi-tour : 12 dégâts. Le 3ᵉ repousse un peu
-  (2,8 m). On tourne **ralenti** à 3,66 m/s comme pour toute attaque, et **sans
+  clic droit, **3 d'affilée maximum**. Chaque tour frappe deux fois chaque cible à
+  3,2 m, devant comme derrière : 6 + 6 dégâts. Le dernier coup du 3ᵉ tour repousse
+  un peu (2,8 m). On tourne **ralenti** à 3,66 m/s comme pour toute attaque, et **sans
   esquive** (Espace + Q/D saute) : sinon le tourbillon devient une sortie
   d'encerclement, et il protège le porteur d'aura (§9). Un coup encaissé avant
   l'impact annule le tour et arrête l'enchaînement, même clic droit maintenu. Après
   le dernier tour, 0,35 s de retour en garde : la jauge est pleine 0,8 s après un
   tour seul.
+
+**Mannequin de test** — couleur paille, au centre de la carte (placé par le JSON de
+la carte, champ `essais`). Il ne bouge pas, ne frappe pas et ne meurt pas ; il
+encaisse tout, projections comprises. Chaque coup s'affiche en chiffre au-dessus
+de lui, et sa plaque additionne : dégâts, nombre de coups, temps écoulé depuis le
+premier, et le temps qu'il aurait fallu pour tuer un joueur niveau 1 (100 PV).
+Ses PV descendent pour le montrer, sans jamais le tuer. Après **3 s sans être
+frappé**, tout repart à zéro et il revient à son poste. Les mannequins rouges ne
+s'en occupent pas.
 
 > **L'étourdissement est annulable.** L'ennemi est totalement bloqué 0,3 s, puis
 > peut s'extraire avec une esquive — qui lui coûte une demi-jauge. C'est le seul
@@ -254,7 +284,9 @@ quand la jauge est pleine.
   L'uppercut passe dans le plan **miroir** : dans celui de la taille, « en bas »
   veut dire en bas à gauche, et la lame armée disparaissait derrière la capsule.
   Au tourbillon, tout le buste fait un tour complet par tour, hache tendue sur le
-  côté, à vitesse constante pour que les tours s'enchaînent sans à-coup.
+  côté, à vitesse constante pour que les tours s'enchaînent sans à-coup. Un geste
+  double s'arrête à mi-course au premier coup, s'y tient un instant, puis finit au
+  second : deux accélérations, deux éclats.
 - **Plongeon** : lame droite au-dessus de la tête pendant la suspension, pointée
   vers le bas pendant la chute, **plantée dans le sol** pendant la récupération,
   le buste penché dessus qui se redresse. C'est cette pose qui rend la
@@ -269,8 +301,8 @@ quand la jauge est pleine.
 |---|---|---|
 | Épée contre 100 PV (niveau 1) | 5 | **2,47 s** |
 | Épée contre 140 PV (niveau max) | 7 | **3,70 s** |
-| Longue hache contre 100 PV, en recollant après la projection | 4 | **2,13 s** |
-| Longue hache contre 140 PV | 6 | **3,57 s** |
+| Longue hache contre 100 PV, en recollant après la projection | 8 | **2,28 s** |
+| Longue hache contre 140 PV | 11 | **3,57 s** |
 | Poings contre 100 PV | 10 | 4,20 s |
 
 Le niveau max reste dans la fenêtre : la rampe de PV ne casse pas la garantie

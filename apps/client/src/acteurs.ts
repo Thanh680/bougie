@@ -1,16 +1,26 @@
 import * as pc from 'playcanvas'
 import {
   ARMES,
+  CHARGE_DUREE,
+  COUP_DOS_DELAI,
+  DELAI_DOUBLE_COUP,
   DUREE_ESQUIVE,
+  ECRASEMENT_WINDUP,
+  FAUCHE_RECUPERATION,
+  FAUCHE_SUSPENSION,
   HAUTEUR_ENTITE,
   LOURD_SWING,
+  PLONGEON_AVANT_DUREE,
   PLONGEON_PORTEE,
   RAYON_ENTITE,
   RECUPERATION_PLONGEON,
+  SAUTEE_DUREE,
+  SAUTEE_WINDUP,
   TOUR_DUREE,
   TOUR_IMPACT,
+  UPPERCUT_IMPACT,
   WINDUP_LOURD,
-  WINDUP_NORMAL,
+  chargeEnCours,
   clamp,
   deltaAngle,
   lerp,
@@ -88,10 +98,39 @@ const HACHE_TAILLE_IMPACT = -60
  * Coup lourd a la hache : un uppercut, de la lame au ras du sol a droite a la
  * lame au-dessus de la tete a gauche, dans le plan diagonal montant.
  */
-const UPPERCUT_ARME = -100
-const UPPERCUT_IMPACT = 120
+const HACHE_UPPERCUT_ARME = -100
+const HACHE_UPPERCUT_IMPACT = 120
 /** Tourbillon : la hache tendue sur le cote droit, le corps fait un tour complet par tour. */
 const TOURBILLON_LACET = -90
+
+/**
+ * Double epee : deux lames courtes, la gauche toujours en miroir exact de la
+ * droite. Tous les gestes de la Death Scythe se lisent symetriques : ciseaux,
+ * toupie bras tendus, V montant, X du coup fort. Garde : un V devant soi.
+ */
+const DOUBLE_REPOS = -34
+const DOUBLE_CISEAUX_ARME = -115
+const DOUBLE_CISEAUX_IMPACT = 50
+/** Coup fort : les deux lames levees derriere les epaules, abattues en X devant. */
+const DOUBLE_X_ARME = 160
+const DOUBLE_X_IMPACT = -60
+
+/**
+ * Marteau : balayage horizontal tres ample. La tete part loin derriere a
+ * droite, balaie tout le devant et continue sur sa lancee jusqu'a revenir en
+ * garde par l'arriere : un marteau lourd ne repart pas en sens inverse.
+ */
+const MARTEAU_REPOS = -40
+const MARTEAU_ARME = -160
+const MARTEAU_IMPACT = 165
+const FRAPPE_MARTEAU = 0.16
+/** Pivot autour de X dans le plan d'ecrasement : tete au-dessus de la tete, tete au sol devant. */
+const MARTEAU_LEVE = 165
+const MARTEAU_SOL = -78
+/** Le marteau se leve pendant ce temps au debut d'une charge. */
+const LEVEE_CHARGE = 0.3
+/** Duree de l'animation de l'uppercut : les lames redescendent pendant le vol. */
+const UPPERCUT_FIN = UPPERCUT_IMPACT + 0.6
 
 /** Cote du cube qui sert de gant. */
 const GANT = 0.24
@@ -136,6 +175,18 @@ interface Vue {
   /** Longue hache : manche et lame, sous le meme pivot que l'epee. */
   hache: pc.Entity
   pointeHache: pc.Entity
+  /** Marteau : manche et tete, sous le meme pivot. */
+  marteau: pc.Entity
+  pointeMarteau: pc.Entity
+  /**
+   * Double epee : la lame droite est celle de l'epee, raccourcie ; la gauche
+   * a sa propre chaine de plans, recopiee en miroir de la droite a chaque image.
+   */
+  planLacetG: pc.Entity
+  planRoulisG: pc.Entity
+  pivotArmeG: pc.Entity
+  lameG: pc.Entity
+  pointeG: pc.Entity
   /** Materiau des lames, epee comme hache : c'est lui qui porte l'eclat des coups. */
   matArme: pc.StandardMaterial
   /** Les deux bras existent toujours. Seul celui qui frappe s'allonge. */
@@ -158,6 +209,8 @@ interface Vue {
   roulisRendu: number
   /** Positions successives de la pointe de lame pendant le swing. */
   trainee: pc.Vec3[]
+  /** Celle de la lame gauche de la double epee. */
+  traineeG: pc.Vec3[]
   initialisee: boolean
 }
 
@@ -165,6 +218,8 @@ interface Onde {
   x: number
   z: number
   y: number
+  /** Rayon final : la portee du plongeon, ou la zone de l'ecrasement. */
+  rayon: number
   debut: number
   entite: pc.Entity
   materiau: pc.StandardMaterial
@@ -197,7 +252,7 @@ export class Acteurs {
       appliquerMateriau(entite, materiau_)
       entite.enabled = false
       app.root.addChild(entite)
-      this.ondes.push({ x: 0, y: 0, z: 0, debut: -99, entite, materiau: materiau_ })
+      this.ondes.push({ x: 0, y: 0, z: 0, rayon: PLONGEON_PORTEE, debut: -99, entite, materiau: materiau_ })
     }
   }
 
@@ -208,15 +263,21 @@ export class Acteurs {
   /** Effets declenches par un evenement plutot que par un etat continu. */
   consommer(evenements: readonly Evenement[]): void {
     for (const ev of evenements) {
-      if (ev.type === 'plongeon_impact') {
-        const onde = this.ondes[this.prochaineOnde % NB_ONDES]!
-        this.prochaineOnde++
-        onde.x = ev.pos.x
-        onde.y = ev.pos.y
-        onde.z = ev.pos.z
-        onde.debut = this.horloge
-      }
+      // L'onde au sol montre la zone reellement frappee : celle du plongeon,
+      // ou le disque de l'ecrasement du marteau, centre devant lui.
+      if (ev.type === 'plongeon_impact') this.lancerOnde(ev.pos.x, ev.pos.y, ev.pos.z, PLONGEON_PORTEE)
+      else if (ev.type === 'ecrasement_impact') this.lancerOnde(ev.pos.x, ev.pos.y, ev.pos.z, ev.rayon)
     }
+  }
+
+  private lancerOnde(x: number, y: number, z: number, rayon: number): void {
+    const onde = this.ondes[this.prochaineOnde % NB_ONDES]!
+    this.prochaineOnde++
+    onde.x = x
+    onde.y = y
+    onde.z = z
+    onde.rayon = rayon
+    onde.debut = this.horloge
   }
 
   maj(monde: World, idLocal: EntityId, dt: number): void {
@@ -245,7 +306,12 @@ export class Acteurs {
   // --- Construction ---------------------------------------------------------
 
   private creerVue(e: Entite, local: boolean): Vue {
-    const couleurBase = local ? new pc.Color(0.3, 0.6, 1) : new pc.Color(0.78, 0.33, 0.29)
+    // Bleu : soi. Rouge : ce qui frappe. Paille : le mannequin de test, qui ne frappe pas.
+    const couleurBase = local
+      ? new pc.Color(0.3, 0.6, 1)
+      : e.espece === 'essai'
+        ? new pc.Color(0.86, 0.74, 0.42)
+        : new pc.Color(0.78, 0.33, 0.29)
 
     const racine = new pc.Entity(`acteur-${e.id}`)
 
@@ -345,6 +411,45 @@ export class Acteurs {
     hache.addChild(pointeHache)
     hache.enabled = false
 
+    // Marteau : un manche et une tete massive en travers, en T. Vue de dos,
+    // c'est cette barre au bout du manche qui dit « marteau » a distance, et
+    // elle porte l'eclat des coups comme les lames.
+    const marteau = new pc.Entity('marteau')
+    pivotArme.addChild(marteau)
+    const mancheMarteau = new pc.Entity('manche-marteau')
+    mancheMarteau.addComponent('render', { type: 'box' })
+    appliquerMateriau(mancheMarteau, materiau({ diffuse: new pc.Color(0.36, 0.25, 0.16) }))
+    mancheMarteau.setLocalScale(0.08, 0.08, 1.3)
+    mancheMarteau.setLocalPosition(0, 0, -0.55)
+    marteau.addChild(mancheMarteau)
+    const tete = new pc.Entity('tete-marteau')
+    tete.addComponent('render', { type: 'box' })
+    appliquerMateriau(tete, matArme)
+    tete.setLocalScale(0.58, 0.34, 0.34)
+    tete.setLocalPosition(0, 0, -1.2)
+    marteau.addChild(tete)
+    const pointeMarteau = new pc.Entity('pointe-marteau')
+    pointeMarteau.setLocalPosition(0, 0, -1.25)
+    marteau.addChild(pointeMarteau)
+    marteau.enabled = false
+
+    // Lame gauche de la double epee, avec sa propre chaine de plans a l'epaule
+    // gauche. Elle n'est jamais animee directement : majArme la recopie en
+    // miroir de la droite.
+    const planLacetG = new pc.Entity('plan-lacet-g')
+    torse.addChild(planLacetG)
+    const planRoulisG = new pc.Entity('plan-roulis-g')
+    planLacetG.addChild(planRoulisG)
+    const pivotArmeG = new pc.Entity('pivot-arme-g')
+    planRoulisG.addChild(pivotArmeG)
+    const lameG = new pc.Entity('lame-g')
+    lameG.addComponent('render', { type: 'box' })
+    appliquerMateriau(lameG, matArme)
+    pivotArmeG.addChild(lameG)
+    const pointeG = new pc.Entity('pointe-g')
+    lameG.addChild(pointeG)
+    planLacetG.enabled = false
+
     // Aura de palier : disque au sol + colonne de lumiere.
     const aura = new pc.Entity('aura')
     aura.addComponent('render', { type: 'cylinder', castShadows: false })
@@ -383,6 +488,13 @@ export class Acteurs {
       pointe,
       hache,
       pointeHache,
+      marteau,
+      pointeMarteau,
+      planLacetG,
+      planRoulisG,
+      pivotArmeG,
+      lameG,
+      pointeG,
       matArme,
       planLacet,
       planRoulis,
@@ -401,6 +513,7 @@ export class Acteurs {
       yawRendu: e.yaw,
       roulisRendu: 0,
       trainee: [],
+      traineeG: [],
       initialisee: false,
     }
   }
@@ -415,6 +528,7 @@ export class Acteurs {
       vue.yawRendu = e.yaw
       vue.initialisee = true
       vue.trainee.length = 0
+      vue.traineeG.length = 0
     } else {
       const t = 1 - Math.exp(-LISSAGE_POS * dt)
       vue.posRendu.x = lerp(vue.posRendu.x, e.pos.x, t)
@@ -426,6 +540,7 @@ export class Acteurs {
     vue.racine.enabled = e.vivant
     if (!e.vivant) {
       vue.trainee.length = 0
+      vue.traineeG.length = 0
       return
     }
 
@@ -436,23 +551,36 @@ export class Acteurs {
     this.majTorse(vue, e, temps, dt, pose.torsion, pose.penche)
     this.majCorps(vue, e, temps)
     this.majAura(vue, e, temps)
-    this.majTrainee(vue, pose.trainee, e.arme === 'hache' ? vue.pointeHache : vue.pointe)
+    const pointe = e.arme === 'hache' ? vue.pointeHache : e.arme === 'marteau' ? vue.pointeMarteau : vue.pointe
+    majTrainee(vue.trainee, pose.trainee, pointe)
+    majTrainee(vue.traineeG, pose.trainee && e.arme === 'doubleEpee', vue.pointeG)
   }
 
   /** Pose l'arme et les gants, et retourne ce que le torse doit en faire. */
   private majArme(vue: Vue, e: Entite, temps: number): Pose {
     const epee = e.arme === 'epee'
     const hache = e.arme === 'hache'
-    vue.arme.enabled = epee
+    const doubleEpee = e.arme === 'doubleEpee'
+    const marteau = e.arme === 'marteau'
+    vue.arme.enabled = epee || doubleEpee
     vue.hache.enabled = hache
+    vue.marteau.enabled = marteau
+    vue.planLacetG.enabled = doubleEpee
     if (epee) {
       // Lame plate et large : une tige de 8 cm qui balaie en trois images ne se
       // voit pas, une lame de 22 cm de large accroche la lumiere.
       vue.arme.setLocalScale(0.05, 0.22, 1.05)
-      vue.arme.setLocalPosition(0, 0, -0.52)
+      vue.pointe.setLocalPosition(0, 0, -0.55)
+      vue.matArme.diffuse.set(0.85, 0.87, 0.94)
+    } else if (doubleEpee) {
+      // Deux lames plus courtes et plus etroites : la paire se distingue de
+      // l'epee seule au premier coup d'oeil, meme de dos.
+      vue.arme.setLocalScale(0.04, 0.15, 0.85)
       vue.pointe.setLocalPosition(0, 0, -0.55)
       vue.matArme.diffuse.set(0.85, 0.87, 0.94)
     }
+    // Les poses de l'epee repositionnent la lame ; celles des autres armes non.
+    vue.arme.setLocalPosition(0, 0, doubleEpee ? -0.43 : -0.52)
 
     if (vue.dernierCoupVu !== e.dernierCoupA) {
       vue.dernierCoupVu = e.dernierCoupA
@@ -480,21 +608,57 @@ export class Acteurs {
     // Un tour, ou le retour en garde qui suit le dernier.
     const enTourbillon = e.dernierCoupA === e.dernierTourA && temps < e.finSwing
 
+    // Les coups speciaux de la double epee et du marteau : chacun tant que son
+    // animation dure. Le fauchage court jusqu'a la fin de la recuperation qui
+    // suit l'atterrissage, dont la date n'est connue qu'au sol.
+    const dernier = e.typeDernierCoup
+    const ecoule = temps - e.dernierCoupA
+    const enUppercut = dernier === 'uppercut' && ecoule < UPPERCUT_FIN
+    const enFauche = dernier === 'fauche' && (e.chuteLibre || temps < e.finRecuperation)
+    const enSautee = dernier === 'sautee' && ecoule < SAUTEE_DUREE
+    const enEcrasement = dernier === 'ecrasement' && temps < e.finSwing
+
     let resultat: Pose
     if (e.ruee === 'course') {
       resultat = poseRuee(vue)
+    } else if (e.chargeDepuis >= 0) {
+      resultat = this.poseCharge(vue, e, temps)
     } else if (enLourd) {
       resultat = this.poseLourd(vue, e, temps, e.arme)
     } else if (e.plongeon !== 'aucun' || recuperationPlongeon) {
       resultat = this.poseplongeon(vue, e, temps)
     } else if (enTourbillon) {
       resultat = this.poseTourbillon(vue, e, temps)
+    } else if (enUppercut) {
+      resultat = this.poseUppercut(vue, e, temps)
+    } else if (enFauche) {
+      resultat = this.poseFauche(vue, e, temps)
+    } else if (enEcrasement) {
+      resultat = this.poseEcrasement(vue, e, temps)
+    } else if (enSautee) {
+      resultat = this.poseSautee(vue, e, temps)
     } else if (epee) {
       resultat = this.poseEpee(vue, e, temps)
     } else if (hache) {
       resultat = this.poseHache(vue, e, temps)
+    } else if (doubleEpee) {
+      resultat = this.poseDoubleEpee(vue, e, temps)
+    } else if (marteau) {
+      resultat = this.poseMarteau(vue, e, temps)
     } else {
       resultat = this.posePoing(vue, e, temps)
+    }
+
+    // La lame gauche suit la droite en miroir du plan median du corps. Toute la
+    // chaine est recopiee — plans, pivot, lame — pour que le miroir reste exact
+    // quelle que soit la pose.
+    if (doubleEpee) {
+      miroir(vue.planLacet, vue.planLacetG)
+      miroir(vue.planRoulis, vue.planRoulisG)
+      miroir(vue.pivotArme, vue.pivotArmeG)
+      miroir(vue.arme, vue.lameG)
+      vue.lameG.setLocalScale(vue.arme.getLocalScale())
+      vue.pointeG.setLocalPosition(vue.pointe.getLocalPosition())
     }
 
     vue.matArme.update()
@@ -548,11 +712,10 @@ export class Acteurs {
     // Armement : la lame monte au-dessus de l'epaule. Frappe : elle balaie
     // 205 deg en accelerant jusqu'a l'impact. Retour : lent, c'est lui qui
     // donne son poids au coup.
-    const c = coupNormal(e, temps)
+    const c = coupNormal(e, temps, 0)
     vue.pivotArme.setLocalEulerAngles(c.val(ARME_REPOS, ARME_ARMEE, ARME_FRAPPE), 0, 0)
     // L'eclat culmine a l'impact, pas au depart du geste.
-    const eclat = c.phase === 'frappe' ? c.k : c.phase === 'retour' ? Math.max(0, 1 - c.k * 3) : 0
-    vue.matArme.emissive.set(eclat * 0.9, eclat * 0.95, eclat)
+    vue.matArme.emissive.set(c.eclat * 0.9, c.eclat * 0.95, c.eclat)
     return { torsion: c.val(0, TORSE_ARME, TORSE_FRAPPE), penche: 0, trainee: traineeSur(c) }
   }
 
@@ -566,7 +729,7 @@ export class Acteurs {
     vue.planLacet.setLocalEulerAngles(0, 0, 0)
     vue.pivotArme.setLocalEulerAngles(0, 0, 0)
 
-    const c = coupNormal(e, temps)
+    const c = coupNormal(e, temps, 0)
     this.lancerGant(vue, vue.poingGauche, c.val(0, GANT_ARME, 1), 0.66)
     // Aucune torsion du buste : elle ferait pivoter la trajectoire du gant et
     // le coup partirait en diagonale au lieu de partir droit devant.
@@ -576,12 +739,12 @@ export class Acteurs {
   /**
    * Longue hache, enchainement facon Counter Sword : balayage de droite a
    * gauche, revers de gauche a droite, puis taille verticale par-dessus la
-   * tete, qui projette. Le geste est celui du rang fige au depart du coup.
+   * tete, qui projette. Chaque geste frappe deux fois : la lame marque un
+   * temps a mi-course. Le geste est celui du rang fige au depart du coup.
    */
   private poseHache(vue: Vue, e: Entite, temps: number): Pose {
-    const c = coupNormal(e, temps)
-    const eclat = c.phase === 'frappe' ? c.k : c.phase === 'retour' ? Math.max(0, 1 - c.k * 3) : 0
-    vue.matArme.emissive.set(eclat * 0.9, eclat * 0.95, eclat)
+    const c = coupNormal(e, temps, vue.etapeCombo)
+    vue.matArme.emissive.set(c.eclat * 0.9, c.eclat * 0.95, c.eclat)
 
     if (vue.etapeCombo < 2) {
       planHorizontal(vue)
@@ -599,6 +762,251 @@ export class Acteurs {
     planDiagonal(vue)
     vue.pivotArme.setLocalEulerAngles(c.val(ARME_REPOS, HACHE_TAILLE_ARMEE, HACHE_TAILLE_IMPACT), 0, 0)
     return { torsion: c.val(0, 20, -20), penche: c.val(0, 6, -14), trainee: traineeSur(c) }
+  }
+
+  /**
+   * Double epee, les trois gestes de la Death Scythe, toujours symetriques (la
+   * lame gauche recopie la droite en miroir) : des ciseaux qui se croisent
+   * devant, une toupie bras tendus qui frappe deux fois tout autour, puis la
+   * ruee et un V qui remonte — celui qui fait trebucher.
+   */
+  private poseDoubleEpee(vue: Vue, e: Entite, temps: number): Pose {
+    const c = coupNormal(e, temps, vue.etapeCombo)
+    vue.matArme.emissive.set(c.eclat * 0.9, c.eclat * 0.95, c.eclat)
+
+    if (vue.etapeCombo === 0) {
+      planHorizontal(vue)
+      vue.pivotArme.setLocalEulerAngles(0, c.val(DOUBLE_REPOS, DOUBLE_CISEAUX_ARME, DOUBLE_CISEAUX_IMPACT), 0)
+      return { torsion: 0, penche: c.val(0, 3, -6), trainee: traineeSur(c) }
+    }
+
+    if (vue.etapeCombo === 1) {
+      // Toupie : un tour complet, la moitie au premier coup, le reste au
+      // second. Au retour le corps fait deja face a l'avant (-360 = 0) : il ne
+      // doit surtout pas se derouler dans l'autre sens.
+      planHorizontal(vue)
+      vue.pivotArme.setLocalEulerAngles(0, c.val(DOUBLE_REPOS, -90, -90), 0)
+      const tour = c.phase === 'retour' || c.phase === 'repos' ? 0 : c.val(0, 25, -360)
+      return { torsion: tour, penche: -4, trainee: traineeSur(c) }
+    }
+
+    // Ruee et coup montant, dans le plan diagonal montant : dans celui de la
+    // taille, « en bas » passe derriere la capsule.
+    planDiagonalMontant(vue)
+    vue.pivotArme.setLocalEulerAngles(c.val(ARME_REPOS, -100, 130), 0, 0)
+    return { torsion: 0, penche: c.val(0, -16, 8), trainee: traineeSur(c) }
+  }
+
+  /**
+   * Marteau, le balayage du Breaker : la tete part loin derriere a droite
+   * pendant un long armement, balaie tout le devant — le buste suit —, puis
+   * continue sur sa lancee et revient en garde par l'arriere.
+   */
+  private poseMarteau(vue: Vue, e: Entite, temps: number): Pose {
+    planHorizontal(vue)
+    const c = coupNormal(e, temps, 0)
+    // Au retour, on continue a tourner jusqu'a la garde plus un tour, au lieu
+    // de revenir sur ses pas.
+    const lacet =
+      c.phase === 'retour'
+        ? lerp(MARTEAU_IMPACT, MARTEAU_REPOS + 360, c.k)
+        : c.val(MARTEAU_REPOS, MARTEAU_ARME, MARTEAU_IMPACT)
+    vue.pivotArme.setLocalEulerAngles(0, lacet, 0)
+    vue.matArme.emissive.set(c.eclat * 0.9, c.eclat * 0.8, c.eclat * 0.6)
+    return { torsion: c.val(0, 35, -40), penche: c.val(0, 6, -8), trainee: traineeSur(c) }
+  }
+
+  /**
+   * Uppercut de la double epee : accroupi, lames basses, puis tout remonte d'un
+   * coup — les lames en V au-dessus de la tete, le corps qui decolle avec. Elles
+   * redescendent en garde pendant le vol.
+   */
+  private poseUppercut(vue: Vue, e: Entite, temps: number): Pose {
+    planDiagonalMontant(vue)
+    const t = temps - e.dernierCoupA
+    const annuleA = annulationDe(e, e.dernierCoupA)
+    const fin = e.finSwing - e.dernierCoupA
+    const debutFrappe = UPPERCUT_IMPACT - 0.1
+    const lames = lireClesAnnulables(
+      t,
+      [
+        { t: 0, v: ARME_REPOS },
+        { t: debutFrappe, v: -100 },
+        { t: UPPERCUT_IMPACT, v: 140, accel: true },
+        { t: UPPERCUT_FIN, v: ARME_REPOS },
+      ],
+      annuleA,
+      fin,
+      ARME_REPOS,
+    )
+    const penche = lireClesAnnulables(
+      t,
+      [
+        { t: 0, v: 0 },
+        { t: debutFrappe, v: -14 },
+        { t: UPPERCUT_IMPACT, v: 10, accel: true },
+        { t: UPPERCUT_FIN, v: 0 },
+      ],
+      annuleA,
+      fin,
+      0,
+    )
+    vue.pivotArme.setLocalEulerAngles(lames, 0, 0)
+    const porte = annuleA === null || t < annuleA
+    const eclat = porte ? eclatImpact(t, UPPERCUT_IMPACT, 0.1) : 0
+    vue.matArme.emissive.set(eclat * 0.9, eclat * 0.95, eclat)
+    return { torsion: 0, penche, trainee: porte && t >= debutFrappe && t < UPPERCUT_IMPACT + 0.12 }
+  }
+
+  /**
+   * Fauchage aerien : suspendu, bras tendus, le corps s'arme sur la droite puis
+   * balaie tout l'avant d'un large arc, et finit son tour en retombant — sans
+   * pouvoir rien y faire. Au sol, il se releve pendant la recuperation.
+   */
+  private poseFauche(vue: Vue, e: Entite, temps: number): Pose {
+    planHorizontal(vue)
+    if (!e.chuteLibre) {
+      const p = lisse(clamp(1 - (e.finRecuperation - temps) / FAUCHE_RECUPERATION, 0, 1))
+      vue.pivotArme.setLocalEulerAngles(0, lerp(-90, DOUBLE_REPOS, p), 0)
+      vue.matArme.emissive.set(0, 0, 0)
+      return { torsion: 0, penche: lerp(-24, 0, p), trainee: false }
+    }
+
+    const t = temps - e.dernierCoupA
+    const annuleA = annulationDe(e, e.dernierCoupA)
+    const debutFrappe = FAUCHE_SUSPENSION - 0.12
+    const fin = FAUCHE_SUSPENSION + 0.35
+    const lacet = lireClesAnnulables(t, [{ t: 0, v: DOUBLE_REPOS }, { t: 0.12, v: -90 }], annuleA, fin, DOUBLE_REPOS)
+    const torsion = lireClesAnnulables(
+      t,
+      [
+        { t: 0, v: 0 },
+        { t: debutFrappe, v: 80 },
+        { t: FAUCHE_SUSPENSION, v: -170, accel: true },
+        { t: fin, v: -360 },
+      ],
+      annuleA,
+      fin,
+      0,
+    )
+    const penche = lireClesAnnulables(
+      t,
+      [
+        { t: 0, v: 0 },
+        { t: FAUCHE_SUSPENSION, v: -8 },
+        { t: fin, v: -14 },
+      ],
+      annuleA,
+      fin,
+      0,
+    )
+    vue.pivotArme.setLocalEulerAngles(0, lacet, 0)
+    const porte = annuleA === null || t < annuleA
+    const eclat = porte ? eclatImpact(t, FAUCHE_SUSPENSION, 0.12) : 0
+    vue.matArme.emissive.set(eclat * 0.9, eclat * 0.95, eclat)
+    return { torsion, penche, trainee: porte && t >= debutFrappe && t < FAUCHE_SUSPENSION + 0.1 }
+  }
+
+  /**
+   * Charge du marteau : il monte au-dessus de la tete et s'y tient, de plus en
+   * plus brulant. C'est le telegraphe du coup, et il dure tant qu'on tient : a
+   * pleine charge, la tete palpite et tremble.
+   */
+  private poseCharge(vue: Vue, e: Entite, temps: number): Pose {
+    planEcrasement(vue)
+    const niveau = chargeEnCours(e, temps) ?? 0
+    const levee = lisse(clamp((temps - e.chargeDepuis) / LEVEE_CHARGE, 0, 1))
+    const tremble = Math.sin(temps * 38) * 3 * niveau
+    vue.pivotArme.setLocalEulerAngles(lerp(ARME_REPOS, MARTEAU_LEVE, levee) + tremble, 0, 0)
+    const palpite = niveau >= 1 ? 0.25 * Math.sin(temps * 14) : 0
+    const eclat = 0.15 + 0.7 * niveau + palpite
+    vue.matArme.emissive.set(eclat, eclat * 0.55, eclat * 0.2)
+    return { torsion: 12 * levee, penche: 8 * levee, trainee: false }
+  }
+
+  /**
+   * Ecrasement : depuis la ou la charge l'a laisse, le marteau finit de monter,
+   * s'abat au sol devant et y reste un instant avant la garde.
+   */
+  private poseEcrasement(vue: Vue, e: Entite, temps: number): Pose {
+    planEcrasement(vue)
+    const t = temps - e.dernierCoupA
+    const fin = e.finSwing - e.dernierCoupA
+    const annuleA = annulationDe(e, e.dernierCoupA)
+    // La hauteur atteinte pendant la charge : une charge breve n'a pas eu le
+    // temps de lever le marteau, il finit de monter ici.
+    const leveeDepart = lisse(clamp((e.niveauCharge * CHARGE_DUREE) / LEVEE_CHARGE, 0, 1))
+    const debutFrappe = ECRASEMENT_WINDUP - 0.12
+    const auSol = ECRASEMENT_WINDUP + 0.12
+    const tete = lireClesAnnulables(
+      t,
+      [
+        { t: 0, v: lerp(ARME_REPOS, MARTEAU_LEVE, leveeDepart) },
+        { t: debutFrappe, v: MARTEAU_LEVE + 8 },
+        { t: ECRASEMENT_WINDUP, v: MARTEAU_SOL, accel: true },
+        { t: auSol, v: MARTEAU_SOL },
+        { t: fin, v: ARME_REPOS },
+      ],
+      annuleA,
+      fin,
+      ARME_REPOS,
+    )
+    const penche = lireClesAnnulables(
+      t,
+      [
+        { t: 0, v: 8 * leveeDepart },
+        { t: debutFrappe, v: 10 },
+        { t: ECRASEMENT_WINDUP, v: -24, accel: true },
+        { t: auSol, v: -24 },
+        { t: fin, v: 0 },
+      ],
+      annuleA,
+      fin,
+      0,
+    )
+    vue.pivotArme.setLocalEulerAngles(tete, 0, 0)
+    const porte = annuleA === null || t < annuleA
+    const lueur = t < ECRASEMENT_WINDUP ? 0.15 + 0.7 * e.niveauCharge : 0
+    const eclat = porte ? Math.max(lueur, eclatImpact(t, ECRASEMENT_WINDUP, 0.12)) : 0
+    vue.matArme.emissive.set(eclat, eclat * 0.55, eclat * 0.2)
+    return { torsion: 0, penche, trainee: porte && t >= debutFrappe && t < ECRASEMENT_WINDUP + 0.05 }
+  }
+
+  /** Frappe sautee du marteau : leve au-dessus de la tete et abattu devant, en l'air. */
+  private poseSautee(vue: Vue, e: Entite, temps: number): Pose {
+    planEcrasement(vue)
+    const t = temps - e.dernierCoupA
+    const annuleA = annulationDe(e, e.dernierCoupA)
+    const debutFrappe = SAUTEE_WINDUP - 0.1
+    const tete = lireClesAnnulables(
+      t,
+      [
+        { t: 0, v: ARME_REPOS },
+        { t: debutFrappe, v: MARTEAU_LEVE + 5 },
+        { t: SAUTEE_WINDUP, v: MARTEAU_SOL + 5, accel: true },
+        { t: SAUTEE_DUREE, v: ARME_REPOS },
+      ],
+      annuleA,
+      SAUTEE_DUREE,
+      ARME_REPOS,
+    )
+    const penche = lireClesAnnulables(
+      t,
+      [
+        { t: 0, v: 0 },
+        { t: debutFrappe, v: 10 },
+        { t: SAUTEE_WINDUP, v: -20, accel: true },
+        { t: SAUTEE_DUREE, v: 0 },
+      ],
+      annuleA,
+      SAUTEE_DUREE,
+      0,
+    )
+    vue.pivotArme.setLocalEulerAngles(tete, 0, 0)
+    const porte = annuleA === null || t < annuleA
+    const eclat = porte ? eclatImpact(t, SAUTEE_WINDUP, 0.1) : 0
+    vue.matArme.emissive.set(eclat * 0.9, eclat * 0.8, eclat * 0.6)
+    return { torsion: 0, penche, trainee: porte && t >= debutFrappe && t < SAUTEE_WINDUP + 0.05 }
   }
 
   /**
@@ -625,12 +1033,53 @@ export class Acteurs {
             : 0
     vue.matArme.emissive.set(eclat, eclat * 0.9, eclat * 0.6)
 
+    if (arme === 'doubleEpee') {
+      // Coup fort de la Death Scythe : les deux lames s'abattent en X devant.
+      // Pris dans le dos, elles remontent a travers la cible pour le second
+      // coup, en accelerant jusqu'a lui.
+      planDiagonal(vue)
+      const t = temps - e.dernierLourdA
+      if (e.coupDosA >= e.dernierLourdA && t >= WINDUP_LOURD) {
+        const annuleA = annulationDe(e, e.dernierLourdA)
+        const impact2 = WINDUP_LOURD + COUP_DOS_DELAI
+        const lames = lireClesAnnulables(
+          t,
+          [
+            { t: WINDUP_LOURD, v: DOUBLE_X_IMPACT },
+            { t: impact2, v: 120, accel: true },
+            { t: LOURD_SWING, v: ARME_REPOS },
+          ],
+          annuleA,
+          LOURD_SWING,
+          ARME_REPOS,
+        )
+        const penche2 = lireClesAnnulables(
+          t,
+          [
+            { t: WINDUP_LOURD, v: LOURD_PENCHE_IMPACT },
+            { t: impact2, v: 6, accel: true },
+            { t: LOURD_SWING, v: 0 },
+          ],
+          annuleA,
+          LOURD_SWING,
+          0,
+        )
+        vue.pivotArme.setLocalEulerAngles(lames, 0, 0)
+        const porte = annuleA === null || t < annuleA
+        const eclat2 = porte ? Math.max(eclatImpact(t, WINDUP_LOURD, FRAPPE_LOURD), eclatImpact(t, impact2, 0.12)) : 0
+        vue.matArme.emissive.set(eclat2, eclat2 * 0.5, eclat2 * 0.9)
+        return { torsion: 0, penche: penche2, trainee: porte && t < impact2 + 0.1 }
+      }
+      vue.pivotArme.setLocalEulerAngles(c.val(ARME_REPOS, DOUBLE_X_ARME, DOUBLE_X_IMPACT), 0, 0)
+      return { torsion: 0, penche, trainee: traineeSur(c) }
+    }
+
     if (arme === 'hache') {
       // Uppercut facon Counter Sword : la lame part du ras du sol et remonte
       // devant jusqu'au-dessus de la tete. Accroupi a l'armement, le buste se
       // redresse avec le coup.
       planDiagonalMontant(vue)
-      vue.pivotArme.setLocalEulerAngles(c.val(ARME_REPOS, UPPERCUT_ARME, UPPERCUT_IMPACT), 0, 0)
+      vue.pivotArme.setLocalEulerAngles(c.val(ARME_REPOS, HACHE_UPPERCUT_ARME, HACHE_UPPERCUT_IMPACT), 0, 0)
       return { torsion: c.val(0, 20, -20), penche: c.val(0, -10, 10), trainee: traineeSur(c) }
     }
 
@@ -677,8 +1126,9 @@ export class Acteurs {
       tour = courant.tour
       lacet = courant.lacet
       trainee = ecoule < TOUR_DUREE
-      // L'eclat culmine a l'impact, au milieu du tour.
-      const eclat = Math.max(0, 1 - Math.abs(ecoule - TOUR_IMPACT) / 0.15)
+      // Deux eclats par tour, un par impact.
+      const pic = (t: number) => Math.max(0, 1 - Math.abs(ecoule - t) / 0.07)
+      const eclat = Math.max(pic(TOUR_IMPACT), pic(TOUR_IMPACT + DELAI_DOUBLE_COUP))
       vue.matArme.emissive.set(eclat * 0.9, eclat * 0.95, eclat)
     }
 
@@ -703,8 +1153,15 @@ export class Acteurs {
 
     if (e.plongeon === 'chute') {
       vue.planLacet.setLocalPosition(0.42, HAUTEUR_ENTITE * 0.62, -0.35)
-      vue.pivotArme.setLocalEulerAngles(-90, 0, 0) // pointe vers le bas
       vue.matArme.emissive.set(0.9, 0.9, 1)
+      if (ARMES[e.arme].enLAir === 'plongeonAvant') {
+        // Plongeon en avant : le corps se jette sur la cible, la hache s'abat du
+        // dessus de la tete jusqu'au sol devant, en accelerant jusqu'a l'impact.
+        const p = clamp((temps - e.finSuspension) / PLONGEON_AVANT_DUREE, 0, 1)
+        vue.pivotArme.setLocalEulerAngles(lerp(95, -80, p * p), 0, 0)
+        return { torsion: 0, penche: lerp(4, -32, p), trainee: true }
+      }
+      vue.pivotArme.setLocalEulerAngles(-90, 0, 0) // pointe vers le bas
       return { torsion: 0, penche: -16, trainee: false }
     }
 
@@ -797,30 +1254,21 @@ export class Acteurs {
     }
   }
 
-  /** Echantillonne la pointe de lame pendant la frappe, pas pendant l'armement. */
-  private majTrainee(vue: Vue, actif: boolean, pointe: pc.Entity): void {
-    if (!actif) {
-      if (vue.trainee.length > 0) vue.trainee.length = 0
-      return
-    }
-    vue.trainee.push(pointe.getPosition().clone())
-    if (vue.trainee.length > 14) vue.trainee.shift()
-  }
-
   // --- Effets en mode immediat ----------------------------------------------
 
   private dessinerTrainees(): void {
     for (const vue of this.vues.values()) {
-      const t = vue.trainee
-      if (t.length < 2) continue
-      const points: pc.Vec3[] = []
-      const couleurs: pc.Color[] = []
-      for (let i = 1; i < t.length; i++) {
-        const a = i / t.length
-        points.push(t[i - 1]!, t[i]!)
-        couleurs.push(new pc.Color(1, 1, 1, a * 0.5), new pc.Color(1, 1, 1, a * 0.75))
+      for (const t of [vue.trainee, vue.traineeG]) {
+        if (t.length < 2) continue
+        const points: pc.Vec3[] = []
+        const couleurs: pc.Color[] = []
+        for (let i = 1; i < t.length; i++) {
+          const a = i / t.length
+          points.push(t[i - 1]!, t[i]!)
+          couleurs.push(new pc.Color(1, 1, 1, a * 0.5), new pc.Color(1, 1, 1, a * 0.75))
+        }
+        this.app.drawLines(points, couleurs)
       }
-      this.app.drawLines(points, couleurs)
     }
   }
 
@@ -837,7 +1285,7 @@ export class Acteurs {
         continue
       }
 
-      const rayon = 0.5 + (PLONGEON_PORTEE - 0.5) * (1 - (1 - age) ** 2)
+      const rayon = 0.5 + (o.rayon - 0.5) * (1 - (1 - age) ** 2)
       const alpha = (1 - age) ** 1.6
 
       o.entite.enabled = true
@@ -893,6 +1341,41 @@ function planHorizontal(vue: Vue): void {
   vue.planRoulis.setLocalEulerAngles(0, 0, -14)
 }
 
+/**
+ * Plan des coups du marteau vers le sol : presque vertical — la tete tombe
+ * devant soi, la ou frappe l'ecrasement —, juste assez tourne en lacet pour ne
+ * pas etre vu par la tranche depuis la camera. La tete, massive, se lit meme
+ * dans un plan si proche de l'axe avant ; une lame fine, non.
+ */
+function planEcrasement(vue: Vue): void {
+  vue.planLacet.setLocalPosition(RAYON_ENTITE * 0.8, HAUTEUR_ENTITE * 0.62, 0)
+  vue.planLacet.setLocalEulerAngles(0, -20, 0)
+  vue.planRoulis.setLocalEulerAngles(0, 0, -22)
+}
+
+/**
+ * Recopie la pose locale de `source` sur `cible` en miroir du plan median du
+ * corps (x -> -x). Pour une rotation, le miroir garde x et w du quaternion et
+ * inverse y et z. Applique maillon par maillon, il donne le miroir exact de
+ * toute la chaine.
+ */
+function miroir(source: pc.Entity, cible: pc.Entity): void {
+  const p = source.getLocalPosition()
+  cible.setLocalPosition(-p.x, p.y, p.z)
+  const q = source.getLocalRotation()
+  cible.setLocalRotation(q.x, -q.y, -q.z, q.w)
+}
+
+/** Echantillonne la pointe de lame pendant la frappe, pas pendant l'armement. */
+function majTrainee(trainee: pc.Vec3[], actif: boolean, pointe: pc.Entity): void {
+  if (!actif) {
+    if (trainee.length > 0) trainee.length = 0
+    return
+  }
+  trainee.push(pointe.getPosition().clone())
+  if (trainee.length > 14) trainee.shift()
+}
+
 /** Ruee : buste jete en avant, bras en arriere, arme pointee devant. */
 function poseRuee(vue: Vue): Pose {
   vue.planLacet.setLocalPosition(RAYON_ENTITE * 0.8, HAUTEUR_ENTITE * 0.6, 0)
@@ -908,33 +1391,47 @@ function poseRuee(vue: Vue): Pose {
 
 // --- Chronologie d'un coup ----------------------------------------------------
 
-type Phase = 'repos' | 'armement' | 'frappe' | 'retour' | 'annule'
+/** 'tenue' et 'frappe2' : entre les deux impacts d'un geste double, puis le second. */
+type Phase = 'repos' | 'armement' | 'frappe' | 'tenue' | 'frappe2' | 'retour' | 'annule'
 
 interface Coup {
   phase: Phase
   /** Progression lissee dans la phase, de 0 a 1. */
   k: number
+  /** Eclat de la lame, de 0 a 1 : il culmine a chaque impact. */
+  eclat: number
   /** Valeur d'un canal d'animation a trois poses : repos -> armee -> impact -> repos. */
   val(repos: number, armee: number, impact: number): number
 }
 
-const REPOS: Coup = { phase: 'repos', k: 0, val: (repos) => repos }
+const REPOS: Coup = { phase: 'repos', k: 0, eclat: 0, val: (repos) => repos }
 
-function coupNormal(e: Entite, temps: number): Coup {
-  // Le dernier coup etait un coup lourd, un plongeon ou un tour : rien a jouer ici.
+/** Geste double : part du chemin parcourue au premier impact. */
+const MI_COURSE = 0.55
+
+/** `etape` : rang du geste, fige au depart du coup. C'est lui qui dit s'il est double. */
+function coupNormal(e: Entite, temps: number, etape: number): Coup {
+  // Le dernier coup etait un coup lourd, un plongeon, un tour ou un coup
+  // special : rien a jouer ici.
   if (
+    e.typeDernierCoup !== 'normal' ||
     e.dernierCoupA === e.dernierLourdA ||
     e.dernierCoupA === e.dernierPlongeonA ||
     e.dernierCoupA === e.dernierTourA
   ) {
     return REPOS
   }
-  const duree = ARMES[e.arme].dureeSwing
-  return lireCoup(temps - e.dernierCoupA, WINDUP_NORMAL, FRAPPE_NORMAL, duree, annulationDe(e, e.dernierCoupA))
+  const arme = ARMES[e.arme]
+  const geste = arme.gestes[clamp(etape, 0, arme.gestes.length - 1)]!
+  const annuleA = annulationDe(e, e.dernierCoupA)
+  const frappe = e.arme === 'marteau' ? FRAPPE_MARTEAU : FRAPPE_NORMAL
+  const delai2 = geste.coups === 2 ? DELAI_DOUBLE_COUP : null
+  return lireCoup(temps - e.dernierCoupA, arme.windup, frappe, arme.dureeSwing, annuleA, delai2)
 }
 
 function coupLourd(e: Entite, temps: number): Coup {
-  return lireCoup(temps - e.dernierLourdA, WINDUP_LOURD, FRAPPE_LOURD, LOURD_SWING, annulationDe(e, e.dernierLourdA))
+  const annuleA = annulationDe(e, e.dernierLourdA)
+  return lireCoup(temps - e.dernierLourdA, WINDUP_LOURD, FRAPPE_LOURD, LOURD_SWING, annuleA, null)
 }
 
 /** Temps ecoule entre le lancement du coup et son annulation, ou null s'il a porte. */
@@ -945,19 +1442,36 @@ function annulationDe(e: Entite, lanceA: number): number | null {
 /**
  * Ou en est un coup lance il y a `ecoule` secondes. L'impact tombe a `windup`,
  * precede d'une frappe de duree `frappe` ; tout ce qui vient avant est l'armement.
+ *
+ * `delai2` : le geste frappe deux fois, a cet ecart. La premiere frappe
+ * s'arrete a mi-course (MI_COURSE), la lame s'y tient un instant, puis la
+ * seconde finit le geste au second impact. Deux accelerations, deux eclats.
  */
-function lireCoup(ecoule: number, windup: number, frappe: number, duree: number, annuleA: number | null): Coup {
+function lireCoup(
+  ecoule: number,
+  windup: number,
+  frappe: number,
+  duree: number,
+  annuleA: number | null,
+  delai2: number | null,
+): Coup {
+  const double = delai2 !== null
+  const mi = double ? MI_COURSE : 1
   if (annuleA !== null && ecoule >= annuleA) {
     // Fige la pose au moment de l'annulation, puis la ramene au repos pour la
     // fin du swing : le verrou d'attaque, lui, court toujours jusque-la.
-    const fige = lireCoup(annuleA, windup, frappe, duree, null)
+    const fige = lireCoup(annuleA, windup, frappe, duree, null, delai2)
     const k = lisse(clamp((ecoule - annuleA) / (duree - annuleA), 0, 1))
-    return { phase: 'annule', k, val: (r, a, i) => lerp(fige.val(r, a, i), r, k) }
+    return { phase: 'annule', k, eclat: 0, val: (r, a, i) => lerp(fige.val(r, a, i), r, k) }
   }
 
   const debutFrappe = windup - frappe
+  const impact2 = windup + (delai2 ?? 0)
+  const debutFrappe2 = impact2 - frappe
+  const finFrappes = double ? impact2 : windup
   let phase: Phase
   let k: number
+  let eclat = 0
   if (ecoule < 0 || ecoule >= duree) {
     phase = 'repos'
     k = 0
@@ -969,23 +1483,89 @@ function lireCoup(ecoule: number, windup: number, frappe: number, duree: number,
     const p = (ecoule - debutFrappe) / frappe
     phase = 'frappe'
     k = p * p
+    eclat = k
+  } else if (double && ecoule < debutFrappe2) {
+    phase = 'tenue'
+    k = (ecoule - windup) / (debutFrappe2 - windup)
+    eclat = 1 - k
+  } else if (double && ecoule < impact2) {
+    const p = (ecoule - debutFrappe2) / frappe
+    phase = 'frappe2'
+    k = p * p
+    eclat = k
   } else {
     phase = 'retour'
-    k = lisse((ecoule - windup) / (duree - windup))
+    k = lisse((ecoule - finFrappes) / (duree - finFrappes))
+    eclat = Math.max(0, 1 - k * 3)
   }
-  return { phase, k, val: (r, a, i) => canal(phase, k, r, a, i) }
+  return { phase, k, eclat, val: (r, a, i) => canal(phase, k, r, a, i, mi) }
 }
 
-function canal(phase: Phase, k: number, repos: number, armee: number, impact: number): number {
+function canal(phase: Phase, k: number, repos: number, armee: number, impact: number, mi: number): number {
+  const milieu = lerp(armee, impact, mi)
   if (phase === 'armement') return lerp(repos, armee, k)
-  if (phase === 'frappe') return lerp(armee, impact, k)
+  if (phase === 'frappe') return lerp(armee, milieu, k)
+  if (phase === 'tenue') return milieu
+  if (phase === 'frappe2') return lerp(milieu, impact, k)
   if (phase === 'retour') return lerp(impact, repos, k)
   return repos
 }
 
-/** La trainee accompagne la frappe et le tout debut du retour. */
+/** La trainee accompagne les frappes et le tout debut du retour. */
 function traineeSur(c: Coup): boolean {
-  return c.phase === 'frappe' || (c.phase === 'retour' && c.k < 0.3)
+  return c.phase === 'frappe' || c.phase === 'tenue' || c.phase === 'frappe2' || (c.phase === 'retour' && c.k < 0.3)
+}
+
+/**
+ * Image-cle d'un canal d'animation : a `t` secondes du lancement du coup, il
+ * vaut `v`. `accel` : le segment qui y mene accelere jusqu'a elle — une
+ * frappe, dont la vitesse maximale tombe sur l'impact —, sinon il se lisse.
+ * Pour les coups dont la chronologie ne tient pas en trois poses.
+ */
+interface Cle {
+  t: number
+  v: number
+  accel?: boolean
+}
+
+function lireCles(t: number, cles: readonly Cle[]): number {
+  const premiere = cles[0]!
+  if (t <= premiere.t) return premiere.v
+  for (let i = 1; i < cles.length; i++) {
+    const b = cles[i]!
+    if (t < b.t) {
+      const a = cles[i - 1]!
+      const p = (t - a.t) / (b.t - a.t)
+      return lerp(a.v, b.v, b.accel ? p * p : lisse(p))
+    }
+  }
+  return cles[cles.length - 1]!.v
+}
+
+/**
+ * Comme lireCles, avec l'annulation de lireCoup : un coup annule a `annuleA`
+ * se fige la, puis revient a `repos` pour `fin`, sans jamais jouer sa frappe.
+ */
+function lireClesAnnulables(
+  t: number,
+  cles: readonly Cle[],
+  annuleA: number | null,
+  fin: number,
+  repos: number,
+): number {
+  if (annuleA === null || t < annuleA) return lireCles(t, cles)
+  const k = lisse(clamp((t - annuleA) / Math.max(1e-3, fin - annuleA), 0, 1))
+  return lerp(lireCles(annuleA, cles), repos, k)
+}
+
+/** Eclat d'un impact : il monte pendant la frappe, culmine sur le coup et retombe aussitot. */
+function eclatImpact(t: number, impact: number, frappe: number): number {
+  if (t < impact - frappe || t > impact + 0.2) return 0
+  if (t <= impact) {
+    const p = (t - (impact - frappe)) / frappe
+    return p * p
+  }
+  return 1 - (t - impact) / 0.2
 }
 
 function lisse(p: number): number {

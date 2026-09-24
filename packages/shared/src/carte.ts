@@ -18,6 +18,8 @@ export interface Carte {
     rayonPeripherie: number
   }
   apparitions: { x: number; z: number }[]
+  /** Mannequins de test : prototype uniquement, pour mesurer les degats. */
+  essais?: { x: number; z: number }[]
   obstacles: unknown[]
 }
 

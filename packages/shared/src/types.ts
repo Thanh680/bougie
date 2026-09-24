@@ -2,15 +2,20 @@ import type { Vec3 } from './math'
 
 export type EntityId = number
 
-export type Espece = 'joueur' | 'mannequin'
+/** 'essai' : mannequin de test. Ne bouge pas, ne frappe pas, ne meurt pas ; il compte les degats. */
+export type Espece = 'joueur' | 'mannequin' | 'essai'
 
-export type ArmeId = 'poings' | 'epee' | 'hache'
+export type ArmeId = 'poings' | 'epee' | 'hache' | 'doubleEpee' | 'marteau'
 
 export type EtatPlongeon = 'aucun' | 'suspension' | 'chute'
 
 export type EtatRuee = 'aucun' | 'course'
 
-export type TypeAttaque = 'aucun' | 'normal' | 'lourd' | 'tour'
+/**
+ * 'uppercut' et 'fauche' : clic droit et clic en l'air de la double epee.
+ * 'sautee' et 'ecrasement' : clic en l'air et charge relachee du marteau.
+ */
+export type TypeAttaque = 'aucun' | 'normal' | 'lourd' | 'tour' | 'uppercut' | 'fauche' | 'sautee' | 'ecrasement'
 
 /**
  * Entree d'un acteur pour un tick.
@@ -37,10 +42,12 @@ export interface Entree {
   attaqueMaintenue: boolean
   /**
    * Front montant du clic droit, consomme par la sim : l'action speciale de
-   * l'arme. Ruee a l'epee, tourbillon a la hache, rien aux poings.
+   * l'arme. Ruee a l'epee, tourbillon a la hache, uppercut a la double epee,
+   * charge au marteau, rien aux poings.
    */
   speciale: boolean
-  /** Etat continu du clic droit : maintenu, le tourbillon enchaine ses tours. */
+  /** Etat continu du clic droit : maintenu, le tourbillon enchaine ses tours
+   *  et le marteau reste en charge. */
   specialeMaintenue: boolean
 }
 
@@ -72,11 +79,14 @@ export interface Entite {
 
   // Esquive laterale
   finEsquive: number
-  /** Entre 0 et 1. Une esquive en consomme COUT_ESQUIVE. */
-  jaugeEsquive: number
+  /** Entre 0 et STAMINA_MAX. L'esquive la consomme, et les coups speciaux de
+   *  la double epee et du marteau aussi. */
+  stamina: number
 
   /** Vitesse bridee a MULT_RALENTI jusqu'a cette date. Annule par une esquive. */
   ralentiJusqua: number
+  /** Petite ruee d'un coup de hache en cours jusqu'a cette date. */
+  elanJusqua: number
   /** Fenetre pendant laquelle le plafond de vitesse ne s'applique pas, pour
    *  qu'une projection de coup lourd ne soit pas rabotee en plein vol. */
   finPoussee: number
@@ -86,9 +96,11 @@ export interface Entite {
   stunJusqua: number
   stunDepuis: number
 
-  /** Attaque sautee a l'epee : suspension en l'air, puis chute a la verticale. */
+  /** Attaque sautee : suspension en l'air, puis chute a la verticale (epee) ou en avant (hache). */
   plongeon: EtatPlongeon
   finSuspension: number
+  /** Vitesse imposee pendant la chute, calculee a la fin de la suspension. */
+  plongeonVitesse: Vec3
   /** Date du dernier impact de plongeon. Sert au rendu a distinguer une
    *  recuperation de plongeon d'une recuperation de coup lourd. */
   dernierPlongeonA: number
@@ -96,22 +108,37 @@ export interface Entite {
   finRecuperation: number
   /** Pas de saut avant cette date : pendant le coup lourd qui conclut une ruee. */
   sautInterditJusqua: number
+  /** Ni deplacement, ni saut, ni esquive jusqu'a cette date : les coups du marteau. */
+  immobileJusqua: number
 
   /** Date a laquelle le bouton d'attaque a ete enfonce, ou -99. */
   maintienDepuis: number
-  /** Le maintien en cours a deja donne son coup lourd : il n'en donnera pas
-   *  d'autre, et son relachement ne declenchera pas de coup normal. */
+  /** Le maintien en cours a deja donne son coup — le coup lourd, ou le coup
+   *  normal d'une arme qui n'en a pas : il n'en donnera pas d'autre, et son
+   *  relachement ne declenchera pas de coup normal. */
   lourdPendantCeMaintien: boolean
   dernierLourdA: number
+  /** Coup fort de la double epee pris dans le dos : date du premier coup, -99
+   *  sinon. Sert au rendu du second coup. */
+  coupDosA: number
 
   // Attaque en vol : lancee, pas encore resolue. Annulee si on encaisse.
   attaqueEnCours: TypeAttaque
+  /** Type du dernier coup lance, qu'il ait porte ou non. Sert au rendu. */
+  typeDernierCoup: TypeAttaque
+  /** Prochain impact de l'attaque en vol : un geste double en porte deux. */
   attaqueImpactA: number
+  impactsFaits: number
+  /** Nombre d'impacts de l'attaque en vol. */
+  impactsPrevus: number
+  /** Touchees par le premier impact du geste : le second les frappe encore,
+   *  malgre l'invulnerabilite que le premier vient de leur donner. */
+  touchesGeste: EntityId[]
   /** Date de la derniere annulation. Sert au rendu : un coup annule ne doit
    *  jamais jouer sa frappe. */
   attaqueAnnuleeA: number
 
-  // Enchainement de coups normaux (longue hache)
+  // Enchainement de coups normaux (longue hache, double epee)
   /** Rang du dernier coup normal dans l'enchainement (0, 1, 2) ; -1 apres tout
    *  autre coup, ou quand on encaisse. */
   comboEtape: number
@@ -124,6 +151,20 @@ export interface Entite {
   /** Un clic pendant ce tour a demande le suivant. */
   tourDemande: boolean
   dernierTourA: number
+
+  // Coups aeriens de la double epee et du marteau
+  /** Fauchage aerien : suspendu en l'air jusqu'a cette date, le temps du geste. */
+  suspenduJusqua: number
+  /** Apres un fauchage aerien : plus aucun controle jusqu'au sol. */
+  chuteLibre: boolean
+  /** Un coup aerien est deja parti pendant ce saut : un seul par saut. */
+  attaqueAerienne: boolean
+
+  // Charge du marteau (clic droit maintenu)
+  /** Debut de la charge en cours, -99 hors charge. */
+  chargeDepuis: number
+  /** Niveau de la derniere charge relachee, de 0 a 1 : les degats de l'ecrasement. */
+  niveauCharge: number
 
   // Ruee
   ruee: EtatRuee
@@ -163,6 +204,22 @@ export interface Entite {
 
   entree: Entree
   ia?: EtatIA
+  /** Mannequin de test uniquement. */
+  mesure?: EtatMesure
+}
+
+/**
+ * Compteur du mannequin de test. Il additionne tout ce qu'il encaisse, et se
+ * remet a zero — et a son poste — quand on arrete de le frapper.
+ */
+export interface EtatMesure {
+  poste: Vec3
+  degats: number
+  coups: number
+  premierCoupA: number
+  dernierCoupA: number
+  /** Date a laquelle les degats ont atteint ses PV : le temps pour tuer. -99 sinon. */
+  koA: number
 }
 
 export interface EtatIA {
@@ -176,9 +233,13 @@ export type Evenement =
   | { type: 'coup'; attaquant: EntityId; cible: EntityId; degats: number; pos: Vec3 }
   | { type: 'coup_vide'; attaquant: EntityId }
   | { type: 'esquive'; entite: EntityId; direction: number }
-  | { type: 'coup_lourd'; attaquant: EntityId; cible: EntityId | null }
-  | { type: 'attaque_lancee'; entite: EntityId; attaque: 'normal' | 'lourd' | 'tour' }
+  | { type: 'coup_lourd'; attaquant: EntityId; touches: EntityId[] }
+  | { type: 'coup_dos'; attaquant: EntityId; cible: EntityId }
+  | { type: 'attaque_lancee'; entite: EntityId; attaque: Exclude<TypeAttaque, 'aucun'> }
   | { type: 'attaque_annulee'; entite: EntityId }
+  | { type: 'stamina_insuffisante'; entite: EntityId }
+  | { type: 'charge'; entite: EntityId }
+  | { type: 'ecrasement_impact'; entite: EntityId; pos: Vec3; rayon: number; touches: EntityId[] }
   | { type: 'ruee'; entite: EntityId }
   | { type: 'ruee_impact'; entite: EntityId; cible: EntityId | null; pos: Vec3 }
   | { type: 'plongeon'; entite: EntityId }

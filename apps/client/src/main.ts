@@ -32,6 +32,8 @@ window.addEventListener('resize', () => app.resizeCanvas())
 const monde = new World(CARTE_ARENE_VIDE)
 const moi = monde.creerJoueur('Vous')
 for (let i = 0; i < NB_MANNEQUINS; i++) monde.creerMannequin(`Mannequin ${i + 1}`)
+// Mannequins de test, places par la carte : ils comptent les degats encaisses.
+for (const p of monde.carte.essais ?? []) monde.creerEssai('Mannequin de test', p.x, p.z)
 
 const scene = new Scene(app, monde.carte)
 const camera = new CameraTPS(app)
@@ -56,7 +58,8 @@ app.on('update', (dt: number) => {
   // Une seule entree d'attaque : la simulation distingue elle-meme le clic
   // bref (coup normal) du maintien (coup lourd).
   cmd.attaqueMaintenue = entrees.attaqueMaintenue
-  // Clic droit : ruee a l'epee, tourbillon a la hache.
+  // Clic droit : ruee a l'epee, tourbillon a la hache, uppercut a la double
+  // epee, charge au marteau — tenue tant que le bouton l'est.
   if (entrees.veutSpeciale()) cmd.speciale = true
   cmd.specialeMaintenue = entrees.specialeMaintenue
 
@@ -92,6 +95,8 @@ function appliquerTouchesDebug(): void {
     if (touche === pc.KEY_1) moi.arme = 'poings'
     else if (touche === pc.KEY_2) moi.arme = 'epee'
     else if (touche === pc.KEY_3) moi.arme = 'hache'
+    else if (touche === pc.KEY_4) moi.arme = 'doubleEpee'
+    else if (touche === pc.KEY_5) moi.arme = 'marteau'
     else if (touche === pc.KEY_K) monde.forcerMort(moi.id)
   }
 }
